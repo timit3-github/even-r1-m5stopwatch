@@ -1,4 +1,35 @@
-# Validation — v0.2.5, 2026-10-09 UTC / 2026-10-10 JST
+# Validation — v0.2.6, 2026-10-09 UTC / 2026-10-10 JST
+
+## Current status: StopWatch + version rollback
+
+Latest v0.2.5 user log has only role=phone ch1=0 ch2=1, no eligible glasses
+link. User reports G2 reboot did not restore operation and intermittent ring
+disconnect notifications on G2. Root cause remains unknown. Advertising and
+GATT/role processing were unchanged in v0.2.4-to-v0.2.5. The advertised app
+version is reverted from 2.3.2.9999 to 2.2.6.0009 in this build for comparison;
+no claim that version advertisement caused the connection failure.
+
+Default device is now M5Stack StopWatch. Official pinmap confirms blue KEYB
+GPIO1, yellow KEYA GPIO2. GPIO1 retains tap/double/hold/type9 classification.
+GPIO2 uses independent debounce state: short release => down, hold >=700ms
+=> up exactly once, hold release => no further gesture. Navigation has no
+double classification, so two shorts => two downs. Both use shared real-time
+notification pacing, and unavailable-link input is discarded. Added raw GPIO
+transition logs that also work when no G2 link is ready.
+
+Disabled the M5Dial encoder inputs, power-hold GPIO46 and backlight GPIO9;
+StopWatch GPIO46 is an AMOLED data line. No PM1/IO-expander/display/touch driver
+or power optimization added. Official PM1 docs state L1/L2/L3A enabled by
+default, with button pull-ups and ESP32-S3 on L2.
+
+C11 -Wall -Wextra -Werror wire/legacy/input tests pass. Navigation tests cover
+repeated short down, threshold-triggered up once, release without down/up,
+699ms vs 700ms boundary across debounce, delayed polling, boot-held suppression,
+and independent tap/navigation state. No ESP-IDF cross-build or physical
+StopWatch trial performed here; source-only deliverable. BLE connection and
+type9 menu recognition remain unresolved hardware checks.
+
+Historical v0.2.5 validation follows; use the current status above.
 
 ## Current status: v0.2.5
 

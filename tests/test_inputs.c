@@ -130,5 +130,51 @@ int main(void) {
  assert(!r1_button_update(&b,false,100,30,700,300,200));
  assert(r1_button_update(&b,false,130,30,700,300,200)==R1_INPUT_DOUBLE);
 
- puts("input tests passed: quadrature, debounce, standalone hold/release, delayed single, double, tap-then-hold, boundaries, boot-held, timer wrap, late poll");
+ /* StopWatch navigation: each short click is down; holding is only one up. */
+ struct r1_button nav;r1_button_init(&nav,false,0);
+ assert(!r1_nav_button_update(&nav,true,10,30,700));
+ assert(!r1_nav_button_update(&nav,true,40,30,700));
+ assert(!r1_nav_button_update(&nav,false,100,30,700));
+ assert(r1_nav_button_update(&nav,false,130,30,700)==R1_NAV_DOWN);
+ assert(!r1_nav_button_update(&nav,true,150,30,700));
+ assert(!r1_nav_button_update(&nav,true,180,30,700));
+ assert(!r1_nav_button_update(&nav,false,220,30,700));
+ assert(r1_nav_button_update(&nav,false,250,30,700)==R1_NAV_DOWN);
+ assert(!r1_nav_button_update(&nav,true,300,30,700));
+ assert(!r1_nav_button_update(&nav,true,330,30,700));
+ assert(!r1_nav_button_update(&nav,true,1029,30,700));
+ assert(r1_nav_button_update(&nav,true,1030,30,700)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,true,1200,30,700));
+ assert(!r1_nav_button_update(&nav,false,1500,30,700));
+ assert(!r1_nav_button_update(&nav,false,1530,30,700));
+ assert(!r1_nav_button_update(&nav,false,1600,30,700));
+ /* Release debounce must not convert a 699ms press into a long press. */
+ r1_button_init(&nav,false,0);
+ assert(!r1_nav_button_update(&nav,true,10,30,700));
+ assert(!r1_nav_button_update(&nav,true,40,30,700));
+ assert(!r1_nav_button_update(&nav,false,739,30,700));
+ assert(r1_nav_button_update(&nav,false,769,30,700)==R1_NAV_DOWN);
+ /* At 700ms, even a late release poll sends up without down. */
+ r1_button_init(&nav,false,0);
+ assert(!r1_nav_button_update(&nav,true,10,30,700));
+ assert(!r1_nav_button_update(&nav,true,40,30,700));
+ assert(!r1_nav_button_update(&nav,false,740,30,700));
+ assert(r1_nav_button_update(&nav,false,770,30,700)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,false,800,30,700));
+ /* GPIO1 pending tap must survive unrelated GPIO2 navigation. */
+ r1_button_init(&b,false,0);r1_button_init(&nav,false,0);
+ assert(!r1_button_update(&b,true,10,30,700,300,200));
+ assert(!r1_button_update(&b,true,40,30,700,300,200));
+ assert(!r1_button_update(&b,false,100,30,700,300,200));
+ assert(!r1_button_update(&b,false,130,30,700,300,200));
+ assert(!r1_nav_button_update(&nav,true,200,30,700));
+ assert(!r1_nav_button_update(&nav,true,230,30,700));
+ assert(!r1_nav_button_update(&nav,false,300,30,700));
+ assert(r1_nav_button_update(&nav,false,330,30,700)==R1_NAV_DOWN);
+ assert(r1_button_update(&b,false,430,30,700,300,200)==R1_INPUT_CLICK);
+ r1_button_init(&nav,true,0);
+ assert(!r1_nav_button_update(&nav,true,1000,30,700));
+ assert(!r1_nav_button_update(&nav,false,1010,30,700));
+ assert(!r1_nav_button_update(&nav,false,1040,30,700));
+ puts("input tests passed: quadrature, debounce, single/double/tap-hold, hold/release, timer wrap, StopWatch short-down/hold-up, threshold boundaries, independent buttons");
 }

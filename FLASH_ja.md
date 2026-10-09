@@ -1,4 +1,8 @@
-# v0.2.3 M5Dial版の更新
+# ソース版の書き込み
+
+現在のv0.2.6 StopWatch版はStopWatch_ja.mdの手順を参照してください。
+新しいStopWatchへの初回書き込みはbootloader/partition tableも含むflashを使用します。
+以下は既存M5Dialプロジェクトの更新と、旧版からのGATT設定移行の説明です。
 
 v0.2.2からはM5Dial_ja.mdの手順で更新してください。既存sdkconfigの再変更は不要です。
 以下はv0.2.1以前から更新するときのGATT設定手順です。

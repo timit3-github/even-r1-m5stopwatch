@@ -47,6 +47,11 @@ static int selected_conn=-1;
 static int64_t now_ms(void);
 #if R1_BUTTON_GPIO >= 0
 static struct r1_button board_button;
+#endif
+#if R1_NAV_BUTTON_GPIO >= 0
+static struct r1_button nav_button;
+#endif
+#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
 static char button_pending[8];
 static unsigned button_head,button_count;
 #endif
@@ -79,6 +84,11 @@ static void board_inputs_init(void) {
  ESP_ERROR_CHECK(gpio_config(&button));
  r1_button_init(&board_button,!gpio_get_level(R1_BUTTON_GPIO),(uint32_t)now_ms());
 #endif
+#if R1_NAV_BUTTON_GPIO >= 0
+ gpio_config_t nav={.pin_bit_mask=1ULL<<R1_NAV_BUTTON_GPIO,.mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE};
+ ESP_ERROR_CHECK(gpio_config(&nav));
+ r1_button_init(&nav_button,!gpio_get_level(R1_NAV_BUTTON_GPIO),(uint32_t)now_ms());
+#endif
 #if R1_ENCODER_A_GPIO >= 0 && R1_ENCODER_B_GPIO >= 0
  _Static_assert(R1_ENCODER_EDGES_PER_STEP>0 && R1_ENCODER_EDGES_PER_STEP<=4,"Encoder edges must be 1..4");
  encoder_queue=xQueueCreate(128,sizeof(uint8_t));assert(encoder_queue);
@@ -94,7 +104,7 @@ static void board_inputs_init(void) {
  ESP_ERROR_CHECK(gpio_intr_enable(R1_ENCODER_A_GPIO));
  ESP_ERROR_CHECK(gpio_intr_enable(R1_ENCODER_B_GPIO));
 #endif
- ESP_LOGI(TAG,"BOARD_INPUTS button=%d encoder_a=%d encoder_b=%d edges=%d reverse=%d",R1_BUTTON_GPIO,R1_ENCODER_A_GPIO,R1_ENCODER_B_GPIO,R1_ENCODER_EDGES_PER_STEP,R1_ENCODER_REVERSE);
+ ESP_LOGI(TAG,"BOARD_INPUTS button=%d nav_button=%d encoder_a=%d encoder_b=%d edges=%d reverse=%d",R1_BUTTON_GPIO,R1_NAV_BUTTON_GPIO,R1_ENCODER_A_GPIO,R1_ENCODER_B_GPIO,R1_ENCODER_EDGES_PER_STEP,R1_ENCODER_REVERSE);
 }
 struct console_command { char text[540]; };
 struct link {
@@ -426,7 +436,7 @@ static void gesture(char c) {
  default:break;
  }
 }
-#if R1_BUTTON_GPIO >= 0
+#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
 static void board_button_enqueue(char command) {
  if(button_count==sizeof(button_pending)) {ESP_LOGW(TAG,"BUTTON_QUEUE_FULL");return;}
  button_pending[(button_head+button_count)%sizeof(button_pending)]=command;button_count++;
@@ -439,6 +449,7 @@ static void board_inputs_poll(int64_t current) {
  (void)ready;
 #if R1_BUTTON_GPIO >= 0
  bool button_down=!gpio_get_level(R1_BUTTON_GPIO);
+ if(button_down!=board_button.raw) ESP_LOGI(TAG,"BUTTON_RAW down=%d ready=%d",button_down,ready);
  if(!ready) r1_button_init(&board_button,button_down,(uint32_t)current);
  bool button_was_stable=board_button.stable;
  unsigned events=r1_button_update(&board_button,button_down,(uint32_t)current,
@@ -453,6 +464,21 @@ static void board_inputs_poll(int64_t current) {
  if(events&R1_INPUT_TAP_HOLD) board_button_enqueue('m');
  if(events&R1_INPUT_HOLD) board_button_enqueue('h');
  if(events&R1_INPUT_RELEASE) board_button_enqueue('r');
+#endif
+#if R1_NAV_BUTTON_GPIO >= 0
+ bool nav_down=!gpio_get_level(R1_NAV_BUTTON_GPIO);
+ if(nav_down!=nav_button.raw) ESP_LOGI(TAG,"NAV_BUTTON_RAW down=%d ready=%d",nav_down,ready);
+ if(!ready) r1_button_init(&nav_button,nav_down,(uint32_t)current);
+ bool nav_was_stable=nav_button.stable;
+ unsigned nav_action=r1_nav_button_update(&nav_button,nav_down,(uint32_t)current,
+   R1_BUTTON_DEBOUNCE_MS,R1_NAV_BUTTON_HOLD_MS);
+ if(nav_button.stable!=nav_was_stable)
+  ESP_LOGI(TAG,"NAV_BUTTON_EDGE down=%d ready=%d held=%d",nav_button.stable,ready,nav_button.held);
+ if(nav_action) ESP_LOGI(TAG,"NAV_BUTTON action=%s",nav_action==R1_NAV_UP?"up":"down");
+ if(nav_action==R1_NAV_DOWN) board_button_enqueue('j');
+ if(nav_action==R1_NAV_UP) board_button_enqueue('u');
+#endif
+#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
  if(!ready) {button_count=0;button_head=0;}
  uint32_t button_tick=(uint32_t)((esp_timer_get_time()*1024)/1000000);
  if(button_count && (button_pending[button_head]=='r' || !last_touch_tick || button_tick-last_touch_tick>=R1_BUTTON_INTERVAL_TICKS)) {

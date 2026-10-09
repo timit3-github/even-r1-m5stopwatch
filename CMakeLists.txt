@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(PROJECT_VER "0.2.5")
+set(PROJECT_VER "0.2.6")
 list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/src")
 list(REMOVE_DUPLICATES EXTRA_COMPONENT_DIRS)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
