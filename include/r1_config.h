@@ -3,6 +3,9 @@
 #define R1_BUTTON_GPIO 42 /* active-low, internal pull-up */
 #define R1_BUTTON_DEBOUNCE_MS 30
 #define R1_BUTTON_HOLD_MS 700
+#define R1_BUTTON_DOUBLE_MS 300 /* first release to second press; single tap waits */
+#define R1_BUTTON_FOLLOWUP_HOLD_MS 200 /* experimental tap-then-hold threshold */
+#define R1_BUTTON_INTERVAL_TICKS 128 /* experimental spacing; 125ms at 1024Hz */
 #define R1_ENCODER_A_GPIO 41
 #define R1_ENCODER_B_GPIO 40
 #define R1_ENCODER_EDGES_PER_STEP 4
@@ -21,5 +24,5 @@
  * Set 1 to reject a glasses role on an exact peer-address mismatch. */
 #define R1_STRICT_TARGET_MATCH 0
 /* Old stock has one live phone role and one live glasses role (3 link slots). */
-#define R1_PROBE_VERSION "0.2.3"
+#define R1_PROBE_VERSION "0.2.4"
 #define R1_TX_TIMEOUT_MS 5000

@@ -437,14 +437,23 @@ static void board_inputs_poll(int64_t current) {
    (selected_conn<0 || selected_conn==links[i].handle)) ready=true;
  (void)ready;
 #if R1_BUTTON_GPIO >= 0
- unsigned events=r1_button_update(&board_button,!gpio_get_level(R1_BUTTON_GPIO),(uint32_t)current,R1_BUTTON_DEBOUNCE_MS,R1_BUTTON_HOLD_MS);
+ bool button_down=!gpio_get_level(R1_BUTTON_GPIO);
+ if(!ready) r1_button_init(&board_button,button_down,(uint32_t)current);
+ bool button_was_stable=board_button.stable;
+ unsigned events=r1_button_update(&board_button,button_down,(uint32_t)current,
+   R1_BUTTON_DEBOUNCE_MS,R1_BUTTON_HOLD_MS,R1_BUTTON_DOUBLE_MS,R1_BUTTON_FOLLOWUP_HOLD_MS);
+ if(board_button.stable!=button_was_stable)
+  ESP_LOGI(TAG,"BUTTON_EDGE down=%d ready=%d followup=%d held=%d hold_ms=%"PRIu32" elapsed_ms=%"PRIu32,
+    board_button.stable,ready,board_button.followup,board_button.held,board_button.active_hold_ms,
+    (uint32_t)current-board_button.pressed_ms);
  if(events) ESP_LOGI(TAG,"BUTTON events=%u",events);
  if(events&R1_INPUT_CLICK) board_button_enqueue('s');
+ if(events&R1_INPUT_DOUBLE) board_button_enqueue('d');
  if(events&R1_INPUT_HOLD) board_button_enqueue('h');
  if(events&R1_INPUT_RELEASE) board_button_enqueue('r');
  if(!ready) {button_count=0;button_head=0;}
  uint32_t button_tick=(uint32_t)((esp_timer_get_time()*1024)/1000000);
- if(button_count && (button_pending[button_head]=='r' || !last_touch_tick || button_tick-last_touch_tick>=R1_ENCODER_INTERVAL_TICKS)) {
+ if(button_count && (button_pending[button_head]=='r' || !last_touch_tick || button_tick-last_touch_tick>=R1_BUTTON_INTERVAL_TICKS)) {
   gesture(button_pending[button_head]);button_head=(button_head+1)%sizeof(button_pending);button_count--;
  }
 #else

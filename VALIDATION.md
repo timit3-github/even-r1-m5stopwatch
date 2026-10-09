@@ -1,4 +1,35 @@
-# Validation — v0.2.3, 2026-10-09
+# Validation — v0.2.4, 2026-10-09 UTC / 2026-10-10 JST
+
+## Current hardware status
+
+All console gesture commands previously reported working on G2 2.3.2.14.
+With v0.2.3, user confirmed M5Dial GPIO input after idf.py clean/build.
+Latest correction: standalone physical long tap works after sufficient idle
+time. Long tap immediately after short tap does not work. Double tap also does
+not work; v0.2.3 had no double-tap detector. Endpoint logs are needed to identify
+the current G2 sequence acceptance conditions.
+
+## v0.2.4 changes and checks
+
+Added delayed single (300ms), double (type2 only), and follow-up hold (200ms)
+recognition. Follow-up hold queues type1 before type0, using the existing
+125ms spacing and real transmission timestamps. Button spacing now has its own
+R1_BUTTON_INTERVAL_TICKS setting, independent of encoder pacing. Values are experimental;
+the G2 2.3.2.14 sequence-recognition timeout is unknown. Standalone hold remains
+700ms. Added debounced button edge diagnostics, kept the existing hold/release
+packet format. Reset physical input state while no eligible G2 link is ready.
+
+C11 -Wall -Wextra -Werror wire, legacy and input suites pass. Input tests cover
+delayed single without duplicates, double without preceding singles, tap then
+hold/release, second-press deadline through debounce, expired sequence retaining
+700ms standalone hold, late release poll preserving event order, timer wrap,
+boot-held and quadrature regressions. Input ASan/UBSan suite passes.
+
+No ESP-IDF cross-build or physical G2 test of v0.2.4 performed here. No binaries
+included. Tap-then-hold menu recognition is NOT claimed fixed: UPDATE_v0.2.4_ja.md
+specifies expected traces and the matching console h/r comparison.
+
+Historical validation follows; use the current status above for physical inputs.
 
 ## User-confirmed hardware baseline: v0.2.2
 
