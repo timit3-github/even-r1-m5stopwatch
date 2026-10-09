@@ -1,0 +1,177 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,5 +1,5 @@
+ cmake_minimum_required(VERSION 3.16)
+-set(PROJECT_VER "0.2.1")
++set(PROJECT_VER "0.2.2")
+ list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/src")
+ list(REMOVE_DUPLICATES EXTRA_COMPONENT_DIRS)
+ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+--- a/include/r1_config.h
++++ b/include/r1_config.h
+@@ -11,5 +11,5 @@
+  * Set 1 to reject a glasses role on an exact peer-address mismatch. */
+ #define R1_STRICT_TARGET_MATCH 0
+ /* Old stock has one live phone role and one live glasses role (3 link slots). */
+-#define R1_PROBE_VERSION "0.2.1"
++#define R1_PROBE_VERSION "0.2.2"
+ #define R1_TX_TIMEOUT_MS 5000
+--- a/src/main.c
++++ b/src/main.c
+@@ -4,6 +4,7 @@
+ #include <inttypes.h>
+ #include <stdlib.h>
+ #include <ctype.h>
++#include "sdkconfig.h"
+ #include "freertos/FreeRTOS.h"
+ #include "freertos/queue.h"
+ #include "freertos/task.h"
+@@ -24,10 +25,13 @@
+ #include "r1_config.h"
+ #include "r1_wire.h"
+ #include "r1_legacy.h"
++#if CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO
++#error "R1 v0.2.2 needs all four GAP PPCP settings zero. Run: python tools/configure_gatt_layout.py sdkconfig"
++#endif
+ static const char *TAG="R1TEST";
+ #define UUID(n) BLE_UUID128_INIT(0x1f,0x9d,0x32,0xf7,0xf1,0x3a,0x65,0x8e,0x03,0x45,0x05,0x4f,n,0x00,0xe8,0xba)
+ static const ble_uuid128_t service_uuid=UUID(1), rx1_uuid=UUID(0x10), tx1_uuid=UUID(0x11),rx2_uuid=UUID(0x12),tx2_uuid=UUID(0x13);
+-static uint16_t tx1_handle,tx2_handle;
++static uint16_t rx1_handle,tx1_handle,rx2_handle,tx2_handle;
+ static uint8_t own_addr_type;
+ static char device_name[24];
+ static uint8_t identity_addr[6];
+@@ -236,11 +240,24 @@
+ static const struct ble_gatt_svc_def services[]={
+  {.type=BLE_GATT_SVC_TYPE_PRIMARY,.uuid=&service_uuid.u,
+   .characteristics=(struct ble_gatt_chr_def[]){
+-   {.uuid=&rx1_uuid.u,.access_cb=gatt_access,.arg=(void *)1,.flags=BLE_GATT_CHR_F_WRITE_NO_RSP},
++   {.uuid=&rx1_uuid.u,.access_cb=gatt_access,.arg=(void *)1,.flags=BLE_GATT_CHR_F_WRITE_NO_RSP,.val_handle=&rx1_handle},
+    {.uuid=&tx1_uuid.u,.access_cb=gatt_access,.flags=BLE_GATT_CHR_F_NOTIFY,.val_handle=&tx1_handle},
+-   {.uuid=&rx2_uuid.u,.access_cb=gatt_access,.arg=(void *)2,.flags=BLE_GATT_CHR_F_WRITE_NO_RSP},
++   {.uuid=&rx2_uuid.u,.access_cb=gatt_access,.arg=(void *)2,.flags=BLE_GATT_CHR_F_WRITE_NO_RSP,.val_handle=&rx2_handle},
+    {.uuid=&tx2_uuid.u,.access_cb=gatt_access,.flags=BLE_GATT_CHR_F_NOTIFY,.val_handle=&tx2_handle},
+    {0}}}, {0}};
++static void gatt_register(struct ble_gatt_register_ctxt *ctx,void *arg) {
++ (void)arg;
++ char uuid[BLE_UUID_STR_LEN];
++ switch(ctx->op) {
++ case BLE_GATT_REGISTER_OP_SVC:
++  ESP_LOGI(TAG,"GATT_SVC handle=%04x uuid=%s",ctx->svc.handle,ble_uuid_to_str(ctx->svc.svc_def->uuid,uuid));break;
++ case BLE_GATT_REGISTER_OP_CHR:
++  ESP_LOGI(TAG,"GATT_CHR def=%04x value=%04x uuid=%s",ctx->chr.def_handle,ctx->chr.val_handle,ble_uuid_to_str(ctx->chr.chr_def->uuid,uuid));break;
++ case BLE_GATT_REGISTER_OP_DSC:
++  ESP_LOGI(TAG,"GATT_DSC handle=%04x uuid=%s",ctx->dsc.handle,ble_uuid_to_str(ctx->dsc.dsc_def->uuid,uuid));break;
++ default:break;
++ }
++}
+ static void advertise(void) {
+  unsigned count=0;for(unsigned i=0;i<3;i++) count+=links[i].used;
+  bool phone=false,glass=false;
+@@ -309,6 +326,12 @@
+   struct ble_gap_conn_desc d;
+   if(!ble_gap_conn_find(event->enc_change.conn_handle,&d)) {
+    ESP_LOGI(TAG,"SECURITY conn=%u status=%d encrypted=%u bonded=%u",d.conn_handle,event->enc_change.status,d.sec_state.encrypted,d.sec_state.bonded);
++   if(d.sec_state.encrypted && d.sec_state.bonded) {
++    /* The v0.2.2 table moves BAE8 by two handles. Let subscribed bonded
++       clients invalidate their old GATT cache through the standard service. */
++    ble_svc_gatt_changed(1,0xffff);
++    ESP_LOGI(TAG,"GATT_SERVICE_CHANGED queued for subscribed clients");
++   }
+    struct link *l=find_link(d.conn_handle);if(l) {l->encrypted=d.sec_state.encrypted;l->auth_due_ms=now_ms()+100;memcpy(l->peer,d.peer_id_addr.val,6);l->peer_type=d.peer_id_addr.type;}
+   }
+   return 0;
+@@ -439,6 +462,14 @@
+  ble_npl_callout_reset(&ticker,ble_npl_time_ms_to_ticks32(20));
+ }
+ static void on_sync(void) {
++ uint16_t cccd1=0,cccd2=0;
++ int c1=ble_gatts_find_dsc(&service_uuid.u,&tx1_uuid.u,BLE_UUID16_DECLARE(0x2902),&cccd1);
++ int c2=ble_gatts_find_dsc(&service_uuid.u,&tx2_uuid.u,BLE_UUID16_DECLARE(0x2902),&cccd2);
++ ESP_LOGI(TAG,"GATT_LAYOUT rx1=%04x tx1=%04x cccd1=%04x rx2=%04x tx2=%04x cccd2=%04x",rx1_handle,tx1_handle,cccd1,rx2_handle,tx2_handle,cccd2);
++ if(c1 || c2 || rx1_handle!=0x10 || tx1_handle!=0x12 || cccd1!=0x13 || rx2_handle!=0x15 || tx2_handle!=0x17 || cccd2!=0x18) {
++  ESP_LOGE(TAG,"GATT_LAYOUT_MISMATCH; advertising disabled. Check SDK standard services and GAP PPCP settings.");
++  return;
++ }
+  int rc=ble_hs_util_ensure_addr(0);assert(!rc);
+  rc=ble_hs_id_infer_auto(0,&own_addr_type);assert(!rc);
+  /* Use the ESP32-S3's public identity consistently for name/manufacturer. */
+@@ -464,7 +495,7 @@
+  gpio_config_t cfg={.pin_bit_mask=1ULL<<R1_BUTTON_GPIO,.mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE};ESP_ERROR_CHECK(gpio_config(&cfg));
+ #endif
+  ESP_ERROR_CHECK(nimble_port_init());
+- ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;
++ ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;ble_hs_cfg.gatts_register_cb=gatt_register;
+  ble_hs_cfg.sm_bonding=1;ble_hs_cfg.sm_mitm=0;ble_hs_cfg.sm_sc=0;ble_hs_cfg.sm_io_cap=BLE_HS_IO_NO_INPUT_OUTPUT;
+  ble_hs_cfg.sm_our_key_dist=BLE_SM_PAIR_KEY_DIST_ENC|BLE_SM_PAIR_KEY_DIST_ID;
+  ble_hs_cfg.sm_their_key_dist=BLE_SM_PAIR_KEY_DIST_ENC|BLE_SM_PAIR_KEY_DIST_ID;
+--- a/sdkconfig.defaults
++++ b/sdkconfig.defaults
+@@ -12,10 +12,12 @@
+ CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=y
+ CONFIG_BT_NIMBLE_LL_CFG_FEAT_LE_2M_PHY=y
+ CONFIG_BT_NIMBLE_LL_CFG_FEAT_LE_CODED_PHY=y
+-CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL=12
+-CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL=24
+-CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY=4
+-CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO=600
++# Keep the channel-1 ATT values at 0x10 / 0x12 / CCCD 0x13.
++# All four zero disables the extra GAP PPCP characteristic (two attributes).
++CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL=0
++CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL=0
++CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY=0
++CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO=0
+ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+--- /dev/null
++++ b/tools/configure_gatt_layout.py
+@@ -0,0 +1,48 @@
++#!/usr/bin/env python3
++"""Disable the extra GAP PPCP characteristic in an existing ESP-IDF sdkconfig."""
++import argparse
++from pathlib import Path
++import re
++
++KEYS = (
++    "CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL",
++    "CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL",
++    "CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY",
++    "CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO",
++)
++
++
++def update(path):
++    raw = path.read_bytes()
++    text = raw.decode("utf-8")
++    if not re.search(r'^CONFIG_IDF_TARGET="esp32s3"\s*$', text, re.M):
++        raise ValueError("Expected an ESP32-S3 sdkconfig; file left unchanged")
++    for key in KEYS:
++        pattern = rf"^{re.escape(key)}=[^\r\n]*"
++        if len(re.findall(pattern, text, re.M)) != 1:
++            raise ValueError(f"Expected one {key} entry; file left unchanged")
++        text = re.sub(pattern, f"{key}=0", text, flags=re.M)
++    changed = text.encode("utf-8")
++    if changed == raw:
++        print(f"Already configured: {path}")
++        return
++    backup = path.with_name(path.name + ".before-r1-v022")
++    # Never overwrite an existing backup. Existing unrelated settings survive.
++    if not backup.exists():
++        backup.write_bytes(raw)
++    path.write_bytes(changed)
++    print(f"Updated four PPCP values: {path}; backup: {backup}")
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("sdkconfig", type=Path)
++    args = parser.parse_args()
++    try:
++        update(args.sdkconfig)
++    except (OSError, UnicodeError, ValueError) as exc:
++        parser.error(str(exc))
++
++
++if __name__ == "__main__":
++    main()

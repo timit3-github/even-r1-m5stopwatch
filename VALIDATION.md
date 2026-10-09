@@ -1,30 +1,53 @@
-# Validation — v0.2.1, 2026-10-09
+# Validation — v0.2.2, 2026-10-09
 
-## Fixed-vector host tests: passed
+## Hardware evidence: v0.2.1
 
-C11 with -Wall -Wextra -Werror; AddressSanitizer and UndefinedBehaviorSanitizer
-for both wire and legacy test suites (leak detection disabled).
+User reports iPhone pairing completed. The actual endpoint log confirms phone
+role, encrypted=1, bonded=1, successful pairAuth TX, status/time/settings replies
+and advStart. The public-address second connection matches target index 1;
+it is likely G2. It has no channel-1 subscription/write before remote disconnect.
+No successful G2 control is established.
 
-The actual user-supplied 18-byte iPhone pairAuth frame is a fixed oracle:
-outer CRC32 0x01230E57, whole-model MODBUS 0xB126, compact CCITT 0x013F.
-It now decodes to module 1 / command 0 / subcommand 8 / serial 1 / payload 01.
-The checksum helper does not mutate the input. A changed payload with valid
-regenerated outer CRC is still rejected by the inner CRC. Checksum, length,
-header corruption and null decode arguments are rejected. The historical
-compact CCITT fixture remains accepted. Fragmentation and legacy tests pass.
+## GATT layout source verification
 
-## Hardware evidence: v0.2 only
+IDF v5.5.1 submodule metadata pins esp-nimble to
+b45dcedcafb7888174c3567002c36b342ec0b723. Its gap/gatt service sources and
+public ble_gatt.h were inspected. Under the user's configuration, GAP has
+7 attributes (name, appearance, PPCP); GATT has 8 (Service Changed + CCCD,
+Server Supported Features, Client Supported Features; caching disabled).
+Removing PPCP leaves 5+8 attributes before the BAE8 service, making channel-1
+RX/TX/CCCD 0x10/0x12/0x13 and channel-2 RX/TX/CCCD 0x15/0x17/0x18.
+The v0.2.1 computed channel-2 TX value 0x19 matches actual att_handle=25.
+Old G2 ble_ring_profile.c resets these fixed handles at connection open and
+writes the CCCD after 500/700/900ms. Current G2 ATT requests are not captured;
+this remains a strong hypothesis to validate by the new runtime layout logs
+and actual SUBSCRIBE/RX_CH1 after the change.
 
-The user's ESP-IDF 5.5.1 log confirms boot, advertising, one peer connection,
-2M PHY, MTU 247, channel-2 subscription and receipt of pairAuth. v0.2 then
-rejects its MODBUS checksum. No registration, encryption or G2 control success
-is established by that log. v0.2.1 has not yet been flashed on hardware.
+v0.2.2 uses public registration callbacks and ble_gatts_find_dsc to report/check
+the actual database, refusing advertising on mismatch. UUIDs/properties and
+role assignment are unchanged. Service Changed is queued after encrypted,
+bonded connection events; delivery depends on the peer subscribing.
 
-## Firmware build: pending for v0.2.1
+## Tests: passed
 
-The current environment no longer has the previous ESP-IDF/toolchain install.
-PlatformIO installation succeeded, but platform/SDK retrieval did not complete
-before this source delivery. No v0.2.1 ESP32-S3 build is claimed. The archived
-v0.2 firmware is excluded from this source package to prevent accidental reuse.
-Build with the user's existing ESP-IDF 5.5.1 environment, preserving board
-configuration. See FLASH_ja.md and UPDATE_v0.2.1_ja.md.
+Wire/legacy C11 -Wall -Wextra -Werror host suites pass, including the actual
+MODBUS iPhone pairAuth oracle and historical compact CCITT compatibility.
+The sdkconfig updater was tested with CRLF, unrelated settings, backup
+preservation, repeated invocation, wrong target and missing-key rejection.
+Its original file remains unchanged when validation fails.
+
+## Limitations
+
+No v0.2.2 ESP32-S3 cross-build or hardware trial was performed here. The SDK and
+cross compiler are unavailable in this environment; preceding retrieval attempts
+rejected corrupt package downloads and encountered mirror timeouts. No old
+binaries are included. Use the user's existing ESP-IDF 5.5.1 build environment.
+The new startup logs verify the actual runtime table rather than assuming every
+SDK version has identical built-in service sizes. See UPDATE_v0.2.2_ja.md.
+
+## Primary source locations
+
+- https://github.com/espressif/esp-idf/tree/v5.5.1/components/bt/host/nimble
+- https://github.com/espressif/esp-nimble/blob/b45dcedcafb7888174c3567002c36b342ec0b723/nimble/host/services/gap/src/ble_svc_gap.c
+- https://github.com/espressif/esp-nimble/blob/b45dcedcafb7888174c3567002c36b342ec0b723/nimble/host/services/gatt/src/ble_svc_gatt.c
+- https://github.com/kalanihelekunihi/evenRealities-openCFW/blob/832137ec/g2/components/apollo_main/core_overlay/ble_ring_profile.c

@@ -1,9 +1,22 @@
-# Protocol evidence and implementation choices (v0.2.1)
+# Protocol evidence and implementation choices (v0.2.2)
 
 The primary reference is stock R1 2.2.6.0009 and the reconstruction of stock
 G2 2.2.6.10 in evenRealities-openCFW. These are not observations of the user's
 app 2.3.2 / G2 2.3.2.14, except for the user-supplied endpoint log below.
 No R1 or G2 hardware is directly available to the implementer.
+
+## G2 fixed handles and actual v0.2.1 connection
+
+The next user log confirms phone encryption/bonding and reports successful
+app pairing. A public-address peer matching advStart target 1 connects, with
+no RX_CH1 or subscription before disconnect. Old G2 ble_ring_profile.c resets
+handles to write=0x10, notify=0x12, CCCD=0x13 at connection open and schedules
+CCCD writes. The v0.2.1 standard-service configuration shifts BAE8 two handles
+higher (actual channel-2 notify 25 confirms the computed layout). v0.2.2
+disables the additional GAP PPCP characteristic by setting all four configuration
+values to zero. It checks actual handles at runtime and logs registration.
+The current G2 ATT write itself has not been captured; success is unverified.
+See UPDATE_v0.2.2_ja.md and VALIDATION.md for exact source/SDK evidence.
 
 ## Actual iPhone pairAuth request, 2026-10-09
 

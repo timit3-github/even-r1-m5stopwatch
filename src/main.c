@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -24,10 +25,13 @@ void ble_store_config_init(void);
 #include "r1_config.h"
 #include "r1_wire.h"
 #include "r1_legacy.h"
+#if CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO
+#error "R1 v0.2.2 needs all four GAP PPCP settings zero. Run: python tools/configure_gatt_layout.py sdkconfig"
+#endif
 static const char *TAG="R1TEST";
 #define UUID(n) BLE_UUID128_INIT(0x1f,0x9d,0x32,0xf7,0xf1,0x3a,0x65,0x8e,0x03,0x45,0x05,0x4f,n,0x00,0xe8,0xba)
 static const ble_uuid128_t service_uuid=UUID(1), rx1_uuid=UUID(0x10), tx1_uuid=UUID(0x11),rx2_uuid=UUID(0x12),tx2_uuid=UUID(0x13);
-static uint16_t tx1_handle,tx2_handle;
+static uint16_t rx1_handle,tx1_handle,rx2_handle,tx2_handle;
 static uint8_t own_addr_type;
 static char device_name[24];
 static uint8_t identity_addr[6];
@@ -236,11 +240,24 @@ static int gatt_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *
 static const struct ble_gatt_svc_def services[]={
  {.type=BLE_GATT_SVC_TYPE_PRIMARY,.uuid=&service_uuid.u,
   .characteristics=(struct ble_gatt_chr_def[]){
-   {.uuid=&rx1_uuid.u,.access_cb=gatt_access,.arg=(void *)1,.flags=BLE_GATT_CHR_F_WRITE_NO_RSP},
+   {.uuid=&rx1_uuid.u,.access_cb=gatt_access,.arg=(void *)1,.flags=BLE_GATT_CHR_F_WRITE_NO_RSP,.val_handle=&rx1_handle},
    {.uuid=&tx1_uuid.u,.access_cb=gatt_access,.flags=BLE_GATT_CHR_F_NOTIFY,.val_handle=&tx1_handle},
-   {.uuid=&rx2_uuid.u,.access_cb=gatt_access,.arg=(void *)2,.flags=BLE_GATT_CHR_F_WRITE_NO_RSP},
+   {.uuid=&rx2_uuid.u,.access_cb=gatt_access,.arg=(void *)2,.flags=BLE_GATT_CHR_F_WRITE_NO_RSP,.val_handle=&rx2_handle},
    {.uuid=&tx2_uuid.u,.access_cb=gatt_access,.flags=BLE_GATT_CHR_F_NOTIFY,.val_handle=&tx2_handle},
    {0}}}, {0}};
+static void gatt_register(struct ble_gatt_register_ctxt *ctx,void *arg) {
+ (void)arg;
+ char uuid[BLE_UUID_STR_LEN];
+ switch(ctx->op) {
+ case BLE_GATT_REGISTER_OP_SVC:
+  ESP_LOGI(TAG,"GATT_SVC handle=%04x uuid=%s",ctx->svc.handle,ble_uuid_to_str(ctx->svc.svc_def->uuid,uuid));break;
+ case BLE_GATT_REGISTER_OP_CHR:
+  ESP_LOGI(TAG,"GATT_CHR def=%04x value=%04x uuid=%s",ctx->chr.def_handle,ctx->chr.val_handle,ble_uuid_to_str(ctx->chr.chr_def->uuid,uuid));break;
+ case BLE_GATT_REGISTER_OP_DSC:
+  ESP_LOGI(TAG,"GATT_DSC handle=%04x uuid=%s",ctx->dsc.handle,ble_uuid_to_str(ctx->dsc.dsc_def->uuid,uuid));break;
+ default:break;
+ }
+}
 static void advertise(void) {
  unsigned count=0;for(unsigned i=0;i<3;i++) count+=links[i].used;
  bool phone=false,glass=false;
@@ -309,6 +326,12 @@ static int gap_event(struct ble_gap_event *event,void *arg) {
   struct ble_gap_conn_desc d;
   if(!ble_gap_conn_find(event->enc_change.conn_handle,&d)) {
    ESP_LOGI(TAG,"SECURITY conn=%u status=%d encrypted=%u bonded=%u",d.conn_handle,event->enc_change.status,d.sec_state.encrypted,d.sec_state.bonded);
+   if(d.sec_state.encrypted && d.sec_state.bonded) {
+    /* The v0.2.2 table moves BAE8 by two handles. Let subscribed bonded
+       clients invalidate their old GATT cache through the standard service. */
+    ble_svc_gatt_changed(1,0xffff);
+    ESP_LOGI(TAG,"GATT_SERVICE_CHANGED queued for subscribed clients");
+   }
    struct link *l=find_link(d.conn_handle);if(l) {l->encrypted=d.sec_state.encrypted;l->auth_due_ms=now_ms()+100;memcpy(l->peer,d.peer_id_addr.val,6);l->peer_type=d.peer_id_addr.type;}
   }
   return 0;
@@ -439,6 +462,14 @@ static void tick(struct ble_npl_event *ev) {
  ble_npl_callout_reset(&ticker,ble_npl_time_ms_to_ticks32(20));
 }
 static void on_sync(void) {
+ uint16_t cccd1=0,cccd2=0;
+ int c1=ble_gatts_find_dsc(&service_uuid.u,&tx1_uuid.u,BLE_UUID16_DECLARE(0x2902),&cccd1);
+ int c2=ble_gatts_find_dsc(&service_uuid.u,&tx2_uuid.u,BLE_UUID16_DECLARE(0x2902),&cccd2);
+ ESP_LOGI(TAG,"GATT_LAYOUT rx1=%04x tx1=%04x cccd1=%04x rx2=%04x tx2=%04x cccd2=%04x",rx1_handle,tx1_handle,cccd1,rx2_handle,tx2_handle,cccd2);
+ if(c1 || c2 || rx1_handle!=0x10 || tx1_handle!=0x12 || cccd1!=0x13 || rx2_handle!=0x15 || tx2_handle!=0x17 || cccd2!=0x18) {
+  ESP_LOGE(TAG,"GATT_LAYOUT_MISMATCH; advertising disabled. Check SDK standard services and GAP PPCP settings.");
+  return;
+ }
  int rc=ble_hs_util_ensure_addr(0);assert(!rc);
  rc=ble_hs_id_infer_auto(0,&own_addr_type);assert(!rc);
  /* Use the ESP32-S3's public identity consistently for name/manufacturer. */
@@ -464,7 +495,7 @@ void app_main(void) {
  gpio_config_t cfg={.pin_bit_mask=1ULL<<R1_BUTTON_GPIO,.mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE};ESP_ERROR_CHECK(gpio_config(&cfg));
 #endif
  ESP_ERROR_CHECK(nimble_port_init());
- ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;
+ ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;ble_hs_cfg.gatts_register_cb=gatt_register;
  ble_hs_cfg.sm_bonding=1;ble_hs_cfg.sm_mitm=0;ble_hs_cfg.sm_sc=0;ble_hs_cfg.sm_io_cap=BLE_HS_IO_NO_INPUT_OUTPUT;
  ble_hs_cfg.sm_our_key_dist=BLE_SM_PAIR_KEY_DIST_ENC|BLE_SM_PAIR_KEY_DIST_ID;
  ble_hs_cfg.sm_their_key_dist=BLE_SM_PAIR_KEY_DIST_ENC|BLE_SM_PAIR_KEY_DIST_ID;
