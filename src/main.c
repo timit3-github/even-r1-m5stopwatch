@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSL-1.0 AND MIT
+ * Copyright (c) 2026 even-r1-esp32s3 contributors.
+ * Copyright (c) 2026 openCFW contributors. See NOTICE.md and LICENSES. */
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
@@ -724,7 +727,7 @@ void app_main(void) {
  assert(!ble_gatts_count_cfg(services));assert(!ble_gatts_add_svcs(services));
  ble_npl_callout_init(&ticker,nimble_port_get_dflt_eventq(),tick,NULL);
  nimble_port_freertos_init(host_task);
- ESP_LOGI(TAG,"EXPERIMENTAL R1 compatibility firmware; registration/G2 control NOT verified");
+ ESP_LOGI(TAG,"Unofficial R1 compatible remote; StopWatch gestures tested with G2 2.3.2.14");
  ESP_LOGI(TAG,"PROBE_VERSION=%s; type help then Enter",R1_PROBE_VERSION);
  struct console_command command={0};size_t used=0;bool overflow=false;
  while(1) {

@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSL-1.0 AND MIT
+ * Copyright (c) 2026 even-r1-esp32s3 contributors.
+ * Copyright (c) 2026 openCFW contributors. See NOTICE.md and LICENSES. */
 #include "r1_legacy.h"
 #include <string.h>
 

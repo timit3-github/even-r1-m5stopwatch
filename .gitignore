@@ -1,5 +1,33 @@
-.pio/
-build/
-sdkconfig
-sdkconfig.old
-sdkconfig.esp32s3
+# SPDX-License-Identifier: BSL-1.0
+# Copyright (c) 2026 even-r1-esp32s3 contributors.
+# ESP-IDF and local build state
+/build/
+/release/
+/.pio/
+/managed_components/
+/sdkconfig
+/sdkconfig.*
+!/sdkconfig.defaults
+/dependencies.lock
+*.before-r1-*
+*.bin
+*.elf
+*.map
+
+# Captures and local credentials
+/logs/
+/captures/
+*.log
+*.trace
+.env
+.env.*
+credentials.json
+
+# Python and editor caches
+__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

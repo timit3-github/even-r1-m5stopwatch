@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSL-1.0
+ * Copyright (c) 2026 even-r1-esp32s3 contributors. */
 #pragma once
 #include "driver/i2c_master.h"
 /* Internal StopWatch bus. All add/remove/probe/transactions are serialized. */

@@ -1,0 +1,8 @@
+Release v0.3.0: Even R1 Compatible Remote for M5Stack StopWatch
+
+Release date: 2026-10-10
+Project version: 0.3.0
+App compatibility string: 2.3.2.0007 (not stock R1 firmware)
+Source-only distribution; ESP-IDF 5.5.1.
+Input handling and BLE/GATT layout are unchanged from 0.2.9.
+See docs/releases/v0.3.0.md and docs/VALIDATION.md for tested behavior and limitations.

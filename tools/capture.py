@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSL-1.0
+# Copyright (c) 2026 even-r1-esp32s3 contributors.
 """USB serial trace collector; does not require an iPhone app or a BLE sniffer."""
 import argparse
 import datetime as dt

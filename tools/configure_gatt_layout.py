@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSL-1.0
+# Copyright (c) 2026 even-r1-esp32s3 contributors.
 """Disable the extra GAP PPCP characteristic in an existing ESP-IDF sdkconfig."""
 import argparse
 from pathlib import Path

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSL-1.0
+ * Copyright (c) 2026 even-r1-esp32s3 contributors. */
 #pragma once
 /* M5Stack StopWatch defaults; set unused board pins to -1. */
 #define R1_BUTTON_GPIO 1 /* blue KEYB: tap gestures, active-low */
@@ -41,5 +43,5 @@
  * Set 1 to reject a glasses role on an exact peer-address mismatch. */
 #define R1_STRICT_TARGET_MATCH 0
 /* Old stock has one live phone role and one live glasses role (3 link slots). */
-#define R1_PROBE_VERSION "0.2.9"
+#define R1_PROBE_VERSION "0.3.0"
 #define R1_TX_TIMEOUT_MS 5000

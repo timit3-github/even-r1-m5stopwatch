@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSL-1.0 AND MIT
+ * Copyright (c) 2026 even-r1-esp32s3 contributors.
+ * Copyright (c) 2026 M5Stack Technology CO LTD. See NOTICE.md and LICENSES. */
 #include "r1_battery.h"
 #include <stddef.h>
 bool r1_battery_update(struct r1_battery *s,uint16_t mv,int64_t now,

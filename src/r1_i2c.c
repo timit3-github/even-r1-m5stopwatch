@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSL-1.0
+ * Copyright (c) 2026 even-r1-esp32s3 contributors. */
 #include "r1_i2c.h"
 #include "r1_config.h"
 #include "freertos/FreeRTOS.h"

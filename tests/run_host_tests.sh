@@ -1,7 +1,10 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSL-1.0
+# Copyright (c) 2026 even-r1-esp32s3 contributors.
 set -eu
 cd "$(dirname "$0")/.."
 test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT HUP INT TERM
 # Keep test binaries outside the deliverable project.
 cc -std=c11 -Wall -Wextra -Werror -I include src/r1_wire.c tests/test_wire.c -o "$test_dir/wire"
 cc -std=c11 -Wall -Wextra -Werror -I include src/r1_legacy.c tests/test_legacy.c -o "$test_dir/legacy"

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSL-1.0
+ * Copyright (c) 2026 even-r1-esp32s3 contributors. */
 #pragma once
 #include "r1_inputs.h"
 #include <stddef.h>

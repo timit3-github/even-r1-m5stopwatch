@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSL-1.0 AND MIT
+ * Copyright (c) 2026 even-r1-esp32s3 contributors.
+ * Copyright (c) 2026 openCFW contributors. See NOTICE.md and LICENSES. */
 #include "r1_wire.h"
 #include <string.h>
 static uint16_t u16(const uint8_t *p) { return p[0] | (uint16_t)p[1]<<8; }

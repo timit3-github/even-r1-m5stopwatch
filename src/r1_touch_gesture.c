@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSL-1.0 AND MIT
+ * Copyright (c) 2026 even-r1-esp32s3 contributors.
+ * Copyright (c) 2026 M5Stack Technology CO LTD. See NOTICE.md and LICENSES. */
 #include "r1_touch.h"
 #include <stdlib.h>
 bool r1_touch_decode(const uint8_t *p,size_t n,struct r1_touch_sample *s) {

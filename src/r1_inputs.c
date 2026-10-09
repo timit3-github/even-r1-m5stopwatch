@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSL-1.0
+ * Copyright (c) 2026 even-r1-esp32s3 contributors. */
 #include "r1_inputs.h"
 
 void r1_encoder_init(struct r1_encoder *s,uint8_t phase) {

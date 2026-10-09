@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSL-1.0 AND MIT
+ * Copyright (c) 2026 even-r1-esp32s3 contributors.
+ * Copyright (c) 2026 openCFW contributors. See NOTICE.md and LICENSES. */
 #include "r1_wire.h"
 #include <assert.h>
 #include <stdio.h>
@@ -17,7 +20,7 @@ int main(void) {
  assert(flen==sizeof(oracle) && !memcmp(generated,oracle,sizeof(oracle)));
  struct r1_model m;assert(r1_decode(req,sizeof(req),&m));assert(m.serial==0x3f00 && m.subcommand==8 && m.payload_len==1 && m.payload[0]==1);
  assert(m.checksum_scheme==R1_CHECKSUM_COMPACT_CCITT);
- /* Actual iPhone app 2.3.2 -> ESP32-S3 log, 2026-10-09. */
+ /* Fixed model-MODBUS pairAuth regression fixture: no address, key or profile. */
  const uint8_t actual[]={0x00,0x57,0x0e,0x23,0x01,0x64,0x01,0x64,0x01,0x00,0x00,0x00,0x08,0x0d,0x00,0x26,0xb1,0x01};
  struct r1_rx captured={0};
  assert(r1_crc32(actual+5,sizeof(actual)-5)==0x01230e57);
@@ -51,5 +54,5 @@ int main(void) {
  n=r1_fragment(data,13,0,f,sizeof(f));f[5]^=1;assert(r1_receive(&s,f,n)==-1);
  assert(r1_receive(&s,f,4)==-1);f[0]=17;assert(r1_receive(&s,f,5)==-1);
  req[12]^=1;assert(!r1_decode(req,sizeof(req),&m));
- puts("wire tests passed: actual iPhone MODBUS replay, compact CCITT, CRC, fragmentation, corruption, sequence bounds");
+ puts("wire tests passed: MODBUS fixture, compact CCITT, CRC, fragmentation, corruption, sequence bounds");
 }
