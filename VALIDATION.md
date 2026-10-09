@@ -1,4 +1,41 @@
-# Validation — v0.2.2, 2026-10-09
+# Validation — v0.2.3, 2026-10-09
+
+## User-confirmed hardware baseline: v0.2.2
+
+User reports all console commands work with G2 2.3.2.14. Endpoint logs confirm
+GATT layout, channel-1 subscription, glasses role, 88/85/89 requests and replies,
+continued 94 heartbeat, and 11-byte type1/type2 operation notifications. iPhone
+app 2.3.2 pairing and actual G2 UI response are user-confirmed. This establishes
+the existing BLE operation path, not the new physical GPIO input implementation.
+
+## New M5Dial inputs: host tests passed
+
+Quadrature forward/reverse fixed sequences, full detents, contact bounce,
+partial reversal, diagonal transition reset, repeated level, two-edge setting.
+Button contact debounce, short release click, 700ms hold once, hold release
+without click, boot-held suppression, uint32 timer wrap and delayed polling.
+C11 -Wall -Wextra -Werror for wire/legacy/input suites. Input suite passed
+AddressSanitizer + UndefinedBehaviorSanitizer with leak detection disabled.
+
+M5Dial official documentation checked for A=G41, B=G40, 16 detents/64 pulses,
+GPIO46 power hold and GPIO9 LCD backlight; GPIO42 BtnA documented by M5Unified.
+GPIO ISR uses only phase sampling and FreeRTOS queue send, no BLE. Host owns
+all protocol state and physical event scheduling. Overflow resynchronizes and
+reports dropped steps. Non-IRAM ISR can miss edges during flash operations.
+
+## Not yet verified
+
+No v0.2.3 full ESP-IDF cross-build or physical GPIO trial was possible here;
+the ESP-IDF/toolchain install is absent. No binaries are included. Build with
+user's existing ESP-IDF 5.5.1 environment. Rotation direction, one-click scaling,
+physical contact quality and power hold/backlight behavior require M5Dial test.
+See M5Dial_ja.md for steps and configuration.
+
+---
+Historical v0.2.2 validation follows for provenance; its earlier unverified
+G2-control limitation is superseded by the user-confirmed baseline above.
+
+## Historical validation — v0.2.2, 2026-10-09
 
 ## Hardware evidence: v0.2.1
 

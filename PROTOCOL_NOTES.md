@@ -1,9 +1,17 @@
-# Protocol evidence and implementation choices (v0.2.2)
+# Protocol evidence and implementation choices (v0.2.3)
 
 The primary reference is stock R1 2.2.6.0009 and the reconstruction of stock
 G2 2.2.6.10 in evenRealities-openCFW. These are not observations of the user's
 app 2.3.2 / G2 2.3.2.14, except for the user-supplied endpoint log below.
 No R1 or G2 hardware is directly available to the implementer.
+
+## Confirmed console control and M5Dial extension
+
+The user subsequently reported all console commands work with G2 2.3.2.14.
+Actual logs show type1/type2 touch notifications and continued heartbeat ACKs.
+M5Dial v0.2.3 maps physical quadrature detents to the same tested type4/type5
+notifications, and GPIO42 button to type1/type0/type8. GPIO hardware itself is
+not yet verified. Display/touch drivers are not introduced. See M5Dial_ja.md.
 
 ## G2 fixed handles and actual v0.2.1 connection
 

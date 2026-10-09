@@ -1,0 +1,330 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,5 +1,5 @@
+ cmake_minimum_required(VERSION 3.16)
+-set(PROJECT_VER "0.2.2")
++set(PROJECT_VER "0.2.3")
+ list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/src")
+ list(REMOVE_DUPLICATES EXTRA_COMPONENT_DIRS)
+ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -1 +1 @@
+-idf_component_register(SRCS "main.c" "r1_wire.c" "r1_legacy.c" INCLUDE_DIRS "." "../include" REQUIRES bt nvs_flash driver esp_timer)
++idf_component_register(SRCS "main.c" "r1_wire.c" "r1_legacy.c" "r1_inputs.c" INCLUDE_DIRS "." "../include" REQUIRES bt nvs_flash driver esp_timer)
+--- a/include/r1_config.h
++++ b/include/r1_config.h
+@@ -1,6 +1,16 @@
+ #pragma once
+-/* Board-independent defaults. Serial input needs no external wiring. */
+-#define R1_BUTTON_GPIO (-1) /* optional active-low switch to GND; choose a free pin */
++/* M5Dial defaults; set board pins to -1 for a generic ESP32-S3. */
++#define R1_BUTTON_GPIO 42 /* active-low, internal pull-up */
++#define R1_BUTTON_DEBOUNCE_MS 30
++#define R1_BUTTON_HOLD_MS 700
++#define R1_ENCODER_A_GPIO 41
++#define R1_ENCODER_B_GPIO 40
++#define R1_ENCODER_EDGES_PER_STEP 4
++#define R1_ENCODER_REVERSE 0 /* set 1 to swap the two swipe directions */
++#define R1_ENCODER_INTERVAL_TICKS 128 /* 125ms at G2's 1024Hz clock */
++#define R1_ENCODER_PENDING_MAX 4
++#define R1_POWER_HOLD_GPIO 46
++#define R1_DISPLAY_BACKLIGHT_GPIO 9 /* held low; display/touch not initialized */
+ #define R1_APP_VERSION "2.2.6.0009"
+ #define R1_HW_VERSION "603MV1.9.3"
+ /* Emulated identity; not a copied retail serial. Exactly 15 ASCII characters. */
+@@ -11,5 +21,5 @@
+  * Set 1 to reject a glasses role on an exact peer-address mismatch. */
+ #define R1_STRICT_TARGET_MATCH 0
+ /* Old stock has one live phone role and one live glasses role (3 link slots). */
+-#define R1_PROBE_VERSION "0.2.2"
++#define R1_PROBE_VERSION "0.2.3"
+ #define R1_TX_TIMEOUT_MS 5000
+--- a/src/main.c
++++ b/src/main.c
+@@ -25,6 +25,7 @@
+ #include "r1_config.h"
+ #include "r1_wire.h"
+ #include "r1_legacy.h"
++#include "r1_inputs.h"
+ #if CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO
+ #error "R1 v0.2.2 needs all four GAP PPCP settings zero. Run: python tools/configure_gatt_layout.py sdkconfig"
+ #endif
+@@ -43,6 +44,58 @@
+ static bool source_enabled=true;
+ static uint32_t last_touch_tick;
+ static int selected_conn=-1;
++static int64_t now_ms(void);
++#if R1_BUTTON_GPIO >= 0
++static struct r1_button board_button;
++static char button_pending[8];
++static unsigned button_head,button_count;
++#endif
++#if R1_ENCODER_A_GPIO >= 0 && R1_ENCODER_B_GPIO >= 0
++static QueueHandle_t encoder_queue;
++static struct r1_encoder board_encoder;
++static int pending_encoder;
++static volatile unsigned encoder_overflow;
++static uint8_t encoder_phase(void) {
++ return (gpio_get_level(R1_ENCODER_A_GPIO)<<1)|gpio_get_level(R1_ENCODER_B_GPIO);
++}
++static void encoder_isr(void *arg) {
++ (void)arg;uint8_t phase=encoder_phase();BaseType_t woken=pdFALSE;
++ if(xQueueSendFromISR(encoder_queue,&phase,&woken)!=pdTRUE)
++  __atomic_store_n(&encoder_overflow,1,__ATOMIC_RELAXED);
++ if(woken) portYIELD_FROM_ISR();
++}
++#endif
++static void board_output(int pin,int level) {
++ if(pin<0) return;
++ ESP_ERROR_CHECK(gpio_set_level(pin,level));
++ gpio_config_t cfg={.pin_bit_mask=1ULL<<pin,.mode=GPIO_MODE_OUTPUT};
++ ESP_ERROR_CHECK(gpio_config(&cfg));
++}
++static void board_inputs_init(void) {
++ board_output(R1_POWER_HOLD_GPIO,1);
++ board_output(R1_DISPLAY_BACKLIGHT_GPIO,0);
++#if R1_BUTTON_GPIO >= 0
++ gpio_config_t button={.pin_bit_mask=1ULL<<R1_BUTTON_GPIO,.mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE};
++ ESP_ERROR_CHECK(gpio_config(&button));
++ r1_button_init(&board_button,!gpio_get_level(R1_BUTTON_GPIO),(uint32_t)now_ms());
++#endif
++#if R1_ENCODER_A_GPIO >= 0 && R1_ENCODER_B_GPIO >= 0
++ _Static_assert(R1_ENCODER_EDGES_PER_STEP>0 && R1_ENCODER_EDGES_PER_STEP<=4,"Encoder edges must be 1..4");
++ encoder_queue=xQueueCreate(128,sizeof(uint8_t));assert(encoder_queue);
++ gpio_config_t encoder={.pin_bit_mask=(1ULL<<R1_ENCODER_A_GPIO)|(1ULL<<R1_ENCODER_B_GPIO),.mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE};
++ ESP_ERROR_CHECK(gpio_config(&encoder));
++ r1_encoder_init(&board_encoder,encoder_phase());
++ int rc=gpio_install_isr_service(0);
++ if(rc!=ESP_ERR_INVALID_STATE) ESP_ERROR_CHECK(rc);
++ ESP_ERROR_CHECK(gpio_isr_handler_add(R1_ENCODER_A_GPIO,encoder_isr,NULL));
++ ESP_ERROR_CHECK(gpio_isr_handler_add(R1_ENCODER_B_GPIO,encoder_isr,NULL));
++ ESP_ERROR_CHECK(gpio_set_intr_type(R1_ENCODER_A_GPIO,GPIO_INTR_ANYEDGE));
++ ESP_ERROR_CHECK(gpio_set_intr_type(R1_ENCODER_B_GPIO,GPIO_INTR_ANYEDGE));
++ ESP_ERROR_CHECK(gpio_intr_enable(R1_ENCODER_A_GPIO));
++ ESP_ERROR_CHECK(gpio_intr_enable(R1_ENCODER_B_GPIO));
++#endif
++ ESP_LOGI(TAG,"BOARD_INPUTS button=%d encoder_a=%d encoder_b=%d edges=%d reverse=%d",R1_BUTTON_GPIO,R1_ENCODER_A_GPIO,R1_ENCODER_B_GPIO,R1_ENCODER_EDGES_PER_STEP,R1_ENCODER_REVERSE);
++}
+ struct console_command { char text[540]; };
+ struct link {
+  bool used,notify1,notify2,phone,glasses,encrypted,phone_auth_pending;
+@@ -372,6 +425,54 @@
+  default:break;
+  }
+ }
++#if R1_BUTTON_GPIO >= 0
++static void board_button_enqueue(char command) {
++ if(button_count==sizeof(button_pending)) {ESP_LOGW(TAG,"BUTTON_QUEUE_FULL");return;}
++ button_pending[(button_head+button_count)%sizeof(button_pending)]=command;button_count++;
++}
++#endif
++static void board_inputs_poll(int64_t current) {
++ bool ready=false;
++ for(unsigned i=0;i<3;i++) if(links[i].used && links[i].glasses && links[i].notify1 && links[i].touch_enabled && source_enabled &&
++   (selected_conn<0 || selected_conn==links[i].handle)) ready=true;
++ (void)ready;
++#if R1_BUTTON_GPIO >= 0
++ unsigned events=r1_button_update(&board_button,!gpio_get_level(R1_BUTTON_GPIO),(uint32_t)current,R1_BUTTON_DEBOUNCE_MS,R1_BUTTON_HOLD_MS);
++ if(events) ESP_LOGI(TAG,"BUTTON events=%u",events);
++ if(events&R1_INPUT_CLICK) board_button_enqueue('s');
++ if(events&R1_INPUT_HOLD) board_button_enqueue('h');
++ if(events&R1_INPUT_RELEASE) board_button_enqueue('r');
++ if(!ready) {button_count=0;button_head=0;}
++ uint32_t button_tick=(uint32_t)((esp_timer_get_time()*1024)/1000000);
++ if(button_count && (button_pending[button_head]=='r' || !last_touch_tick || button_tick-last_touch_tick>=R1_ENCODER_INTERVAL_TICKS)) {
++  gesture(button_pending[button_head]);button_head=(button_head+1)%sizeof(button_pending);button_count--;
++ }
++#else
++ (void)current;
++#endif
++#if R1_ENCODER_A_GPIO >= 0 && R1_ENCODER_B_GPIO >= 0
++ if(__atomic_exchange_n(&encoder_overflow,0,__ATOMIC_RELAXED)) {
++  xQueueReset(encoder_queue);r1_encoder_init(&board_encoder,encoder_phase());pending_encoder=0;
++  ESP_LOGW(TAG,"ENCODER_OVERFLOW resynchronized (steps dropped)");
++ }
++ uint8_t phase;
++ for(unsigned i=0;i<128 && xQueueReceive(encoder_queue,&phase,0)==pdTRUE;i++) {
++  int delta=r1_encoder_update(&board_encoder,phase,R1_ENCODER_EDGES_PER_STEP);
++  if(!delta) continue;
++  if(R1_ENCODER_REVERSE) delta=-delta;
++  pending_encoder+=delta;
++  if(pending_encoder>R1_ENCODER_PENDING_MAX) pending_encoder=R1_ENCODER_PENDING_MAX;
++  if(pending_encoder<-R1_ENCODER_PENDING_MAX) pending_encoder=-R1_ENCODER_PENDING_MAX;
++  ESP_LOGI(TAG,"ENCODER delta=%d pending=%d",delta,pending_encoder);
++ }
++ if(!ready) {pending_encoder=0;return;} /* Never replay pre-connection rotation. */
++ uint32_t tick=(uint32_t)((esp_timer_get_time()*1024)/1000000);
++ if(pending_encoder && (!last_touch_tick || tick-last_touch_tick>=R1_ENCODER_INTERVAL_TICKS)) {
++  if(pending_encoder>0) {pending_encoder--;gesture('u');}
++  else {pending_encoder++;gesture('j');}
++ }
++#endif
++}
+ static void dump_status(void) {
+  ESP_LOGI(TAG,"STATUS probe=%s adv=%d tx_pending=%u source=%d selected=%d",R1_PROBE_VERSION,ble_gap_adv_active(),tx_count,source_enabled,selected_conn);
+  log_bytes("TARGETS_LE_RAW",0,targets,sizeof(targets));
+@@ -434,18 +535,7 @@
+    ESP_LOGI(TAG,"PHONE_AUTH_NOTIFY conn=%u",l->handle);
+   }
+  }
+-#if R1_BUTTON_GPIO >= 0
+- static bool last=false,held=false;static int64_t pressed_at,changed_at;static int clicks;
+- int64_t now=esp_timer_get_time()/1000;bool down=!gpio_get_level(R1_BUTTON_GPIO);
+- if(down!=last && now-changed_at>=30) {
+-  last=down;changed_at=now;
+-  if(down) {pressed_at=now;held=false;}
+-  else if(!held) {clicks++;if(clicks==2) {gesture('d');clicks=0;}}
+-  else gesture('r');
+- }
+- if(last && !held && now-pressed_at>=700) {gesture('h');held=true;clicks=0;}
+- if(!last && clicks==1 && now-changed_at>=300) {gesture('s');clicks=0;}
+-#endif
++ board_inputs_poll(current);
+  if(tx_count) {
+   struct tx_packet *t=&tx_queue[tx_head];struct link *l=find_link(t->conn);bool remove=false;
+   if(!l || l->generation!=t->generation || (t->attr==tx1_handle?!l->notify1:!l->notify2)) remove=true;
+@@ -485,15 +575,13 @@
+ static void on_reset(int reason) {ESP_LOGE(TAG,"HOST_RESET reason=%d",reason);memset(links,0,sizeof(links));tx_count=0;tx_head=0;selected_conn=-1;}
+ static void host_task(void *p) {(void)p;nimble_port_run();nimble_port_freertos_deinit();}
+ void app_main(void) {
++ board_inputs_init();
+  /* Never auto-erase NVS on failure: persisted bonds must not silently vanish. */
+  ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("r1test",NVS_READWRITE,&settings));
+  _Static_assert(sizeof(R1_SERIAL)==16,"R1_SERIAL must be 15 ASCII bytes");
+  _Static_assert(sizeof(R1_APP_VERSION)<=16,"app version exceeds slot");
+  _Static_assert(sizeof(R1_HW_VERSION)<=16,"hardware version exceeds slot");
+  input_queue=xQueueCreate(8,sizeof(struct console_command));assert(input_queue);
+-#if R1_BUTTON_GPIO >= 0
+- gpio_config_t cfg={.pin_bit_mask=1ULL<<R1_BUTTON_GPIO,.mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE};ESP_ERROR_CHECK(gpio_config(&cfg));
+-#endif
+  ESP_ERROR_CHECK(nimble_port_init());
+  ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;ble_hs_cfg.gatts_register_cb=gatt_register;
+  ble_hs_cfg.sm_bonding=1;ble_hs_cfg.sm_mitm=0;ble_hs_cfg.sm_sc=0;ble_hs_cfg.sm_io_cap=BLE_HS_IO_NO_INPUT_OUTPUT;
+--- /dev/null
++++ b/include/r1_inputs.h
+@@ -0,0 +1,17 @@
++#pragma once
++#include <stdbool.h>
++#include <stdint.h>
++
++struct r1_encoder { uint8_t phase; int8_t partial; };
++void r1_encoder_init(struct r1_encoder *s,uint8_t phase);
++/* phase=(A<<1)|B; +1 for 3->1->0->2->3, -1 for reverse. */
++int r1_encoder_update(struct r1_encoder *s,uint8_t phase,unsigned edges);
++
++enum { R1_INPUT_CLICK=1, R1_INPUT_HOLD=2, R1_INPUT_RELEASE=4 };
++struct r1_button {
++ bool raw,stable,armed,held;
++ uint32_t changed_ms,pressed_ms;
++};
++void r1_button_init(struct r1_button *s,bool down,uint32_t now);
++unsigned r1_button_update(struct r1_button *s,bool down,uint32_t now,
++                         uint32_t debounce_ms,uint32_t hold_ms);
+--- /dev/null
++++ b/src/r1_inputs.c
+@@ -0,0 +1,37 @@
++#include "r1_inputs.h"
++
++void r1_encoder_init(struct r1_encoder *s,uint8_t phase) {
++ *s=(struct r1_encoder){.phase=phase&3};
++}
++int r1_encoder_update(struct r1_encoder *s,uint8_t phase,unsigned edges) {
++ static const int8_t delta[16]={0,-1,1,0,1,0,0,-1,-1,0,0,1,0,1,-1,0};
++ phase&=3;
++ if(!edges || edges>4) return 0;
++ if((s->phase^phase)==3) {s->partial=0;s->phase=phase;return 0;}
++ s->partial+=delta[(s->phase<<2)|phase];s->phase=phase;
++ if(s->partial>=(int)edges) {s->partial=0;return 1;}
++ if(s->partial<=-(int)edges) {s->partial=0;return -1;}
++ return 0;
++}
++void r1_button_init(struct r1_button *s,bool down,uint32_t now) {
++ *s=(struct r1_button){.raw=down,.stable=down,.armed=!down,.changed_ms=now};
++}
++unsigned r1_button_update(struct r1_button *s,bool down,uint32_t now,
++                         uint32_t debounce_ms,uint32_t hold_ms) {
++ unsigned events=0;
++ if(down!=s->raw) {s->raw=down;s->changed_ms=now;}
++ if(s->stable!=s->raw && (uint32_t)(now-s->changed_ms)>=debounce_ms) {
++  s->stable=s->raw;
++  if(s->stable) {s->pressed_ms=now;s->held=false;}
++  else if(!s->armed) s->armed=true; /* Ignore a button held at boot. */
++  else if(s->held) events=R1_INPUT_RELEASE;
++  else if((uint32_t)(s->changed_ms-s->pressed_ms)>=hold_ms)
++   events=R1_INPUT_HOLD|R1_INPUT_RELEASE;
++  else events=R1_INPUT_CLICK;
++ }
++ if(s->armed && s->stable && s->raw && !s->held &&
++    (uint32_t)(now-s->pressed_ms)>=hold_ms) {
++  s->held=true;events|=R1_INPUT_HOLD;
++ }
++ return events;
++}
+--- /dev/null
++++ b/tests/test_inputs.c
+@@ -0,0 +1,54 @@
++#include "r1_inputs.h"
++#include <assert.h>
++#include <stdio.h>
++#include <stdint.h>
++
++int main(void) {
++ struct r1_encoder e;
++ r1_encoder_init(&e,3);
++ const uint8_t forward[]={1,0,2,3},reverse[]={2,0,1,3};
++ for(unsigned i=0;i<4;i++) assert(r1_encoder_update(&e,forward[i],4)==(i==3?1:0));
++ for(unsigned i=0;i<4;i++) assert(r1_encoder_update(&e,reverse[i],4)==(i==3?-1:0));
++ /* Contact bounce and reversing halfway must not fabricate a detent. */
++ const uint8_t bounce[]={1,3,1,0,1,0,2,3};
++ for(unsigned i=0;i<8;i++) assert(r1_encoder_update(&e,bounce[i],4)==(i==7?1:0));
++ const uint8_t partial[]={1,0,1,3};
++ for(unsigned i=0;i<4;i++) assert(!r1_encoder_update(&e,partial[i],4));
++ assert(!r1_encoder_update(&e,0,4)); /* impossible diagonal resets */
++ assert(!r1_encoder_update(&e,0,4));
++ assert(!r1_encoder_update(&e,2,4));assert(!r1_encoder_update(&e,3,4));
++ assert(!r1_encoder_update(&e,1,4));assert(r1_encoder_update(&e,0,4)==1);
++ r1_encoder_init(&e,3);assert(!r1_encoder_update(&e,1,2));assert(r1_encoder_update(&e,0,2)==1);
++ struct r1_button b;r1_button_init(&b,false,0);
++ assert(!r1_button_update(&b,true,10,30,700));
++ assert(!r1_button_update(&b,false,20,30,700));
++ assert(!r1_button_update(&b,false,60,30,700)); /* bounce only */
++ assert(!r1_button_update(&b,true,100,30,700));
++ assert(!r1_button_update(&b,true,129,30,700));
++ assert(!r1_button_update(&b,true,130,30,700));
++ assert(!r1_button_update(&b,false,200,30,700));
++ assert(r1_button_update(&b,false,230,30,700)==R1_INPUT_CLICK);
++ assert(!r1_button_update(&b,false,250,30,700));
++ assert(!r1_button_update(&b,true,300,30,700));
++ assert(!r1_button_update(&b,true,330,30,700));
++ assert(!r1_button_update(&b,true,1029,30,700));
++ assert(r1_button_update(&b,true,1030,30,700)==R1_INPUT_HOLD);
++ assert(!r1_button_update(&b,true,1200,30,700));
++ assert(!r1_button_update(&b,false,1300,30,700));
++ assert(r1_button_update(&b,false,1330,30,700)==R1_INPUT_RELEASE);
++ assert(!r1_button_update(&b,false,1400,30,700));
++ r1_button_init(&b,true,0);assert(!r1_button_update(&b,true,1000,30,700));
++ assert(!r1_button_update(&b,false,1010,30,700));assert(!r1_button_update(&b,false,1040,30,700));
++ /* Timer wrap and late poll spanning the hold threshold. */
++ r1_button_init(&b,false,UINT32_MAX-100);
++ assert(!r1_button_update(&b,true,UINT32_MAX-80,30,700));
++ assert(!r1_button_update(&b,true,UINT32_MAX-50,30,700));
++ assert(r1_button_update(&b,true,649,30,700)==R1_INPUT_HOLD);
++ assert(!r1_button_update(&b,false,660,30,700));
++ assert(r1_button_update(&b,false,690,30,700)==R1_INPUT_RELEASE);
++ r1_button_init(&b,false,0);assert(!r1_button_update(&b,true,10,30,700));
++ assert(!r1_button_update(&b,true,40,30,700));
++ assert(!r1_button_update(&b,false,900,30,700));
++ assert(r1_button_update(&b,false,930,30,700)==(R1_INPUT_HOLD|R1_INPUT_RELEASE));
++ puts("input tests passed: quadrature direction, detents, bounce, reversal, invalid edge, button debounce/hold/release, boot-held, timer wrap");
++}
+--- a/tests/run_host_tests.sh
++++ b/tests/run_host_tests.sh
+@@ -5,5 +5,7 @@
+ # Keep test binaries outside the deliverable project.
+ cc -std=c11 -Wall -Wextra -Werror -I include src/r1_wire.c tests/test_wire.c -o "$test_dir/wire"
+ cc -std=c11 -Wall -Wextra -Werror -I include src/r1_legacy.c tests/test_legacy.c -o "$test_dir/legacy"
++cc -std=c11 -Wall -Wextra -Werror -I include src/r1_inputs.c tests/test_inputs.c -o "$test_dir/inputs"
+ "$test_dir/wire"
+ "$test_dir/legacy"
++"$test_dir/inputs"

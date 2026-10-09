@@ -1,4 +1,9 @@
-# v0.2.2ソース版の書き込み
+# v0.2.3 M5Dial版の更新
+
+v0.2.2からはM5Dial_ja.mdの手順で更新してください。既存sdkconfigの再変更は不要です。
+以下はv0.2.1以前から更新するときのGATT設定手順です。
+
+## GATT設定を含むソース版の書き込み
 
 ビルド済みバイナリは含みません。現在のESP-IDF v5.5.1環境を使用してください。
 既存プロジェクトへsrc/main.c、include/r1_config.h、CMakeLists.txt、
