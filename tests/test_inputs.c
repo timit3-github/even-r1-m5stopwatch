@@ -72,7 +72,7 @@ int main(void) {
  assert(r1_button_update(&b,false,310,30,700,300,200)==R1_INPUT_DOUBLE);
  assert(!r1_button_update(&b,false,800,30,700,300,200));
 
- /* Tap then hold resolves the pending tap before HOLD, once each. */
+ /* Tap then hold emits one dedicated event, without CLICK or plain HOLD. */
  r1_button_init(&b,false,0);
  assert(!r1_button_update(&b,true,10,30,700,300,200));
  assert(!r1_button_update(&b,true,40,30,700,300,200));
@@ -81,7 +81,7 @@ int main(void) {
  assert(!r1_button_update(&b,true,200,30,700,300,200));
  assert(!r1_button_update(&b,true,230,30,700,300,200));
  assert(!r1_button_update(&b,true,429,30,700,300,200));
- assert(r1_button_update(&b,true,430,30,700,300,200)==(R1_INPUT_CLICK|R1_INPUT_HOLD));
+ assert(r1_button_update(&b,true,430,30,700,300,200)==R1_INPUT_TAP_HOLD);
  assert(!r1_button_update(&b,true,1000,30,700,300,200));
  assert(!r1_button_update(&b,false,1100,30,700,300,200));
  assert(r1_button_update(&b,false,1130,30,700,300,200)==R1_INPUT_RELEASE);
@@ -95,7 +95,7 @@ int main(void) {
  assert(!r1_button_update(&b,false,130,30,700,300,200));
  assert(!r1_button_update(&b,true,430,30,700,300,200));
  assert(!r1_button_update(&b,true,460,30,700,300,200));
- assert(r1_button_update(&b,true,660,30,700,300,200)==(R1_INPUT_CLICK|R1_INPUT_HOLD));
+ assert(r1_button_update(&b,true,660,30,700,300,200)==R1_INPUT_TAP_HOLD);
 
  /* Too late: flush first tap and retain standalone 700ms hold. */
  r1_button_init(&b,false,0);
@@ -108,7 +108,7 @@ int main(void) {
  assert(!r1_button_update(&b,true,1160,30,700,300,200));
  assert(r1_button_update(&b,true,1161,30,700,300,200)==R1_INPUT_HOLD);
 
- /* Late release poll preserves tap, hold and release. */
+ /* Late release poll preserves dedicated tap-hold and release. */
  r1_button_init(&b,false,0);
  assert(!r1_button_update(&b,true,10,30,700,300,200));
  assert(!r1_button_update(&b,true,40,30,700,300,200));
@@ -117,7 +117,7 @@ int main(void) {
  assert(!r1_button_update(&b,true,200,30,700,300,200));
  assert(!r1_button_update(&b,true,230,30,700,300,200));
  assert(!r1_button_update(&b,false,500,30,700,300,200));
- assert(r1_button_update(&b,false,530,30,700,300,200)==(R1_INPUT_CLICK|R1_INPUT_HOLD|R1_INPUT_RELEASE));
+ assert(r1_button_update(&b,false,530,30,700,300,200)==(R1_INPUT_TAP_HOLD|R1_INPUT_RELEASE));
 
  /* Pending tap and second press survive uint32 timer wrap. */
  r1_button_init(&b,false,UINT32_MAX-200);

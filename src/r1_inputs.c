@@ -32,16 +32,18 @@ unsigned r1_button_update(struct r1_button *s,bool down,uint32_t now,
   else if(!s->armed) s->armed=true; /* Ignore a button held at boot. */
   else if(s->held) events=R1_INPUT_RELEASE;
   else if((uint32_t)(s->changed_ms-s->pressed_ms)>=s->active_hold_ms) {
-   if(s->followup) {events|=R1_INPUT_CLICK;s->pending_click=false;}
-   events|=R1_INPUT_HOLD|R1_INPUT_RELEASE;
+   if(s->followup) {events|=R1_INPUT_TAP_HOLD;s->pending_click=false;}
+   else events|=R1_INPUT_HOLD;
+   events|=R1_INPUT_RELEASE;
   }
   else if(s->followup) {events|=R1_INPUT_DOUBLE;s->pending_click=false;}
   else {s->pending_click=true;s->tap_ms=now;}
  }
  if(s->armed && s->stable && s->raw && !s->held &&
     (uint32_t)(now-s->pressed_ms)>=s->active_hold_ms) {
-  if(s->followup) {events|=R1_INPUT_CLICK;s->pending_click=false;}
-  s->held=true;events|=R1_INPUT_HOLD;
+  if(s->followup) {events|=R1_INPUT_TAP_HOLD;s->pending_click=false;}
+  else events|=R1_INPUT_HOLD;
+  s->held=true;
  }
  /* Keep a candidate second press through debounce, including at the boundary. */
  if(s->pending_click && !s->stable && !s->raw &&

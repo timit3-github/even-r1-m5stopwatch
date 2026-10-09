@@ -47,9 +47,15 @@ int main(void) {
     const uint8_t touch[]={0,9,0x61,0,1,0,0,0x78,0x56,0x34,0x12};
     assert(r1_legacy_touch(1,0,0,0x12345678,out,sizeof(out))==sizeof(touch));
     assert(!memcmp(out,touch,sizeof(touch)));
-    const uint8_t types[]={0,1,2,4,5,8};
+    /* g2flash gesture_fwd.c maps R1 wire type9 to tap-then-long, event11.
+     * This is a newer report, absent from the old 2.2.6 receiver table. */
+    const uint8_t tap_hold[]={0,9,0x61,0,9,0,0,0x78,0x56,0x34,0x12};
+    assert(r1_legacy_touch(9,0,0,0x12345678,out,11)==11);
+    assert(!memcmp(out,tap_hold,11));
+    const uint8_t types[]={0,1,2,4,5,8,9};
     for(size_t i=0;i<sizeof(types);i++) assert(r1_legacy_touch(types[i],7,9,123,out,11)==11);
     assert(!r1_legacy_touch(3,0,0,0,out,11));
+    assert(!r1_legacy_touch(11,0,0,0,out,11)); /* SDK event11 is not wire type11. */
     assert(!r1_legacy_touch(1,0,0,0,out,10));
     assert(!r1_legacy_touch(1,0,0,0,NULL,11));
 

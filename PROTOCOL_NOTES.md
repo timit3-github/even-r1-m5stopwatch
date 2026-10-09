@@ -106,6 +106,23 @@ mutation; values 20/40 recognized by a special G2 recovery path are not invented
   algorithm license, factory commands and DFU are not reproduced.
 - Wire logs are endpoint logs from the ESP, not a capture of an existing R1 link.
 
+## Newer tap-then-long report (v0.2.5)
+
+The old G2 2.2.6 receiver table accepts wire types 0,1,2,4,5,8. It is not a
+complete type list for newer G2 firmware. jimrandomh/g2flash gesture_fwd.c at
+ca7e0b7a882d50c8ec8e0e597ff93640950a655f explicitly decodes R1 report[4]==9
+as tap-then-long, mapping it to the CFW's private SysEvent 11. Wire type9 and
+SysEvent 11 belong to different protocols: do not send BLE type11.
+
+v0.2.4's type1 then type0 reports failed on the user's stock G2 2.3.2.14 despite
+a 146-tick gap (142.58ms), above the old 100-tick suppression threshold.
+v0.2.5 sends one 11-byte type9 report with aux/speed zero, and type8 on release.
+This applies a newer public decoder mapping; it is not a capture from an R1,
+and successful menu recognition on stock 2.3.2.14 remains to be tested.
+No CFW patch or G2 firmware modification is required by this ESP experiment.
+
+Source: https://github.com/jimrandomh/g2flash/blob/ca7e0b7a882d50c8ec8e0e597ff93640950a655f/patches/gesture_fwd.c
+
 ## Primary references
 
 - [R1 protocol](https://github.com/kalanihelekunihi/evenRealities-openCFW/blob/main/r1/docs/protocol.md)

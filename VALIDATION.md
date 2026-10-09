@@ -1,4 +1,33 @@
-# Validation — v0.2.4, 2026-10-09 UTC / 2026-10-10 JST
+# Validation — v0.2.5, 2026-10-09 UTC / 2026-10-10 JST
+
+## Current status: v0.2.5
+
+User confirmed physical double tap works in v0.2.4. Short then long failed;
+the supplied trace shows type1 at tick 0x477ff, type0 at 0x47891 (146 ticks,
+142.58ms), then type8 at 0x47cd5 (1092 ticks after hold, 1.066s). This rules out
+the old receiver's below-100-tick suppression for that type1-to-type0 pair;
+it does not prove acceptance by G2 2.3.2.14.
+
+New public g2flash gesture_fwd.c decoder maps R1 wire type9 to private SysEvent
+11, distinct from standalone long press. README identifies tap-then-long as
+a new gesture in G2 2.2.9. Source commit ca7e0b7a882d50c8ec8e0e597ff93640950a655f.
+v0.2.5 admits wire type9, emits it once for physical tap-then-hold, and adds
+console m/menu. Plain type1/type0 are suppressed for this combination; type8
+is retained on release. Double/standalone hold classification is unchanged.
+
+Wire/legacy/input C11 -Wall -Wextra -Werror suites pass. New tests pin the
+type9 frame and reject wire type11, assert exactly one dedicated combination
+event without singles/ordinary holds, preserve release on late polling and
+verify prior double, standalone hold, timing boundaries and wrap regressions.
+Input ASan/UBSan passes. No ESP-IDF cross-build or stock G2 type9 hardware
+test performed here. Source-only distribution, recognition still unverified.
+
+User also confirmed that advertised R1_APP_VERSION=2.3.2.9999 removes the
+incompatible-ring-version popup in Even app 2.3.2. This value is now the default;
+it is an emulated version string, not an assertion that a retail release exists.
+The app's precise comparison rule remains unknown.
+
+Historical v0.2.4 validation follows; use the status above for current behavior.
 
 ## Current hardware status
 

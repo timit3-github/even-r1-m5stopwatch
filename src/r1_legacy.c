@@ -31,7 +31,7 @@ bool r1_legacy_parse(const uint8_t *p, size_t n, struct r1_legacy_plan *out) {
 size_t r1_legacy_touch(uint8_t type, uint8_t v0, uint8_t v1, uint32_t tick,
                        uint8_t *out, size_t cap) {
     if (!out || cap < 11 || (type != 0 && type != 1 && type != 2 &&
-                            type != 4 && type != 5 && type != 8)) return 0;
+                            type != 4 && type != 5 && type != 8 && type != 9)) return 0;
     const uint8_t header[7] = {0, 9, 0x61, 0, type, v0, v1};
     memcpy(out, header, sizeof(header));
     for (unsigned i = 0; i < 4; i++) out[7+i] = (uint8_t)(tick >> (8*i));

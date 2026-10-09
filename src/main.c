@@ -419,6 +419,7 @@ static void gesture(char c) {
  case 's':touch_event(1,0,0);break;
  case 'd':touch_event(2,0,0);break;
  case 'h':touch_event(0,0,0);break;
+ case 'm':touch_event(9,0,0);break; /* Newer R1 tap-then-long report. */
  case 'u':touch_event(4,1,1);break;
  case 'j':touch_event(5,1,1);break;
  case 'r':touch_event(8,0,0);break;
@@ -449,6 +450,7 @@ static void board_inputs_poll(int64_t current) {
  if(events) ESP_LOGI(TAG,"BUTTON events=%u",events);
  if(events&R1_INPUT_CLICK) board_button_enqueue('s');
  if(events&R1_INPUT_DOUBLE) board_button_enqueue('d');
+ if(events&R1_INPUT_TAP_HOLD) board_button_enqueue('m');
  if(events&R1_INPUT_HOLD) board_button_enqueue('h');
  if(events&R1_INPUT_RELEASE) board_button_enqueue('r');
  if(!ready) {button_count=0;button_head=0;}
@@ -493,7 +495,8 @@ static void dump_status(void) {
 }
 static void console_dispatch(const char *text) {
  unsigned type,v0,v1;char trailing;
- if(strlen(text)==1 && strchr("sdhujr",text[0])) {gesture(text[0]);return;}
+ if(strlen(text)==1 && strchr("sdhmujr",text[0])) {gesture(text[0]);return;}
+ if(!strcmp(text,"menu")) {gesture('m');return;}
  if(!strcmp(text,"status")) {dump_status();return;}
  if(!strcmp(text,"auto")) {selected_conn=-1;ESP_LOGI(TAG,"SELECT auto");return;}
  if(sscanf(text,"select %u %c",&type,&trailing)==1 && type<=UINT16_MAX) {
@@ -524,7 +527,7 @@ static void console_dispatch(const char *text) {
   queue_packet(l,channel==1?tx1_handle:tx2_handle,bytes,n);return;
  }
  if(!strcmp(text,"help") || !strcmp(text,"?")) {
-  ESP_LOGI(TAG,"Commands: status | s d h u j r | event TYPE V0 V1 | select CONN | auto | send CONN CHANNEL HEX");return;
+  ESP_LOGI(TAG,"Commands: status | s d h m u j r | menu (type9) | event TYPE V0 V1 | select CONN | auto | send CONN CHANNEL HEX");return;
  }
 invalid:
  ESP_LOGW(TAG,"INVALID_COMMAND (help for syntax)");
