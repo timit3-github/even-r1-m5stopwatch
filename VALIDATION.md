@@ -216,3 +216,12 @@ checked against primary sources linked in UPDATE_v0.2.8_ja.md.
 No ESP32-S3 cross-build or battery hardware/UI verification was performed.
 User confirms v0.2.7 repeat and a delayed reboot reconnect with version 2.3.2.0007.
 
+## v0.2.9 touch validation
+
+All five host suites pass with C11 -Wall -Wextra -Werror, including CST820
+frame decoding, position-independent taps/double taps, hold/menu, swipe/slop
+boundaries, horizontal cancellation, one swipe/contact, final UP coordinates,
+reset while touching and timer wrap. IOE pin enum/register updates were checked
+against official M5IOE1 1.0.8 and the StopWatch demo; touch L2 power was checked
+against the official schematic. No ESP32-S3 build or touch hardware test here.
+

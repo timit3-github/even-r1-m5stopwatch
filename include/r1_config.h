@@ -30,10 +30,16 @@
 #define R1_BATTERY_NOTIFY_MS 30000 /* also notify when the estimated % changes */
 #define R1_BATTERY_EMPTY_MV 3300
 #define R1_BATTERY_FULL_MV 4200
+#define R1_TOUCH_ENABLED 1 /* StopWatch CST820B; set 0 for M5Dial */
+#define R1_TOUCH_POLL_MS 20
+#define R1_TOUCH_STALE_MS 300
+#define R1_TOUCH_SWIPE_PX 60 /* one up/down per contact */
+#define R1_TOUCH_TAP_SLOP_PX 20 /* movement beyond this cancels tap/hold */
+#define R1_TOUCH_SWIPE_REVERSE 0 /* 0: finger upward=up, downward=down */
 #define R1_REASSEMBLY_TIMEOUT_MS 5000
 /* Logging-only target checks until command/peer byte order is observed.
  * Set 1 to reject a glasses role on an exact peer-address mismatch. */
 #define R1_STRICT_TARGET_MATCH 0
 /* Old stock has one live phone role and one live glasses role (3 link slots). */
-#define R1_PROBE_VERSION "0.2.8"
+#define R1_PROBE_VERSION "0.2.9"
 #define R1_TX_TIMEOUT_MS 5000

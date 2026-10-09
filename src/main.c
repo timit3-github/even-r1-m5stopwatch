@@ -27,6 +27,8 @@ void ble_store_config_init(void);
 #include "r1_legacy.h"
 #include "r1_inputs.h"
 #include "r1_battery.h"
+#include "r1_i2c.h"
+#include "r1_touch.h"
 #if CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO
 #error "R1 v0.2.2 needs all four GAP PPCP settings zero. Run: python tools/configure_gatt_layout.py sdkconfig"
 #endif
@@ -53,9 +55,12 @@ static struct r1_button board_button;
 static struct r1_button nav_button;
 static uint32_t nav_last_up_ms;
 #endif
-#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
+#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
 static char button_pending[8];
 static unsigned button_head,button_count;
+#endif
+#if R1_TOUCH_ENABLED
+static struct r1_touch_gesture touch_gesture;
 #endif
 #if R1_ENCODER_A_GPIO >= 0 && R1_ENCODER_B_GPIO >= 0
 static QueueHandle_t encoder_queue;
@@ -443,7 +448,7 @@ static void gesture(char c) {
  default:break;
  }
 }
-#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
+#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
 static void board_button_enqueue(char command) {
  /* Retain at most one repeat while other inputs occupy the pacing queue. */
  if(command=='U') for(unsigned i=0;i<button_count;i++)
@@ -467,6 +472,38 @@ static void board_inputs_poll(int64_t current) {
  for(unsigned i=0;i<3;i++) if(links[i].used && links[i].glasses && links[i].notify1 && links[i].touch_enabled && source_enabled &&
    (selected_conn<0 || selected_conn==links[i].handle)) ready=true;
  (void)ready;
+#if R1_TOUCH_ENABLED
+ if(r1_touch_hw_overflow()) {
+  if(touch_gesture.button.held) board_button_enqueue('r');
+  r1_touch_gesture_init(&touch_gesture,true,(uint32_t)current);
+  ESP_LOGW(TAG,"TOUCH_QUEUE_OVERFLOW gesture canceled");
+ }
+ struct r1_touch_sample sample;
+ for(unsigned i=0;i<32 && r1_touch_hw_pop(&sample);i++) {
+  if(!sample.valid || !ready || current-sample.ms>R1_TOUCH_STALE_MS) {
+   if(ready && touch_gesture.button.held) board_button_enqueue('r');
+   r1_touch_gesture_init(&touch_gesture,true,(uint32_t)current);continue;
+  }
+  bool was_down=touch_gesture.contact;
+  unsigned tp=r1_touch_gesture_update(&touch_gesture,sample.down,sample.position?sample.x:-1,sample.position?sample.y:-1,
+   (uint32_t)sample.ms,R1_BUTTON_HOLD_MS,R1_BUTTON_DOUBLE_MS,R1_BUTTON_FOLLOWUP_HOLD_MS,
+   R1_TOUCH_TAP_SLOP_PX,R1_TOUCH_SWIPE_PX);
+  if(was_down!=sample.down) ESP_LOGI(TAG,"TOUCH_EDGE down=%d x=%u y=%u",sample.down,sample.x,sample.y);
+  if(tp) ESP_LOGI(TAG,"TOUCH_GESTURE events=%u x=%u y=%u",tp,sample.x,sample.y);
+  if(tp&R1_INPUT_CLICK) board_button_enqueue('s');
+  if(tp&R1_INPUT_DOUBLE) board_button_enqueue('d');
+  if(tp&R1_INPUT_TAP_HOLD) board_button_enqueue('m');
+  if(tp&R1_INPUT_HOLD) board_button_enqueue('h');
+  if(tp&R1_INPUT_RELEASE) board_button_enqueue('r');
+  if(tp&R1_INPUT_UP) board_button_enqueue(R1_TOUCH_SWIPE_REVERSE?'j':'u');
+  if(tp&R1_INPUT_DOWN) board_button_enqueue(R1_TOUCH_SWIPE_REVERSE?'u':'j');
+ }
+ struct r1_touch_sample last_sample=r1_touch_hw_get();
+ if(!ready || !last_sample.valid || current-last_sample.ms>R1_TOUCH_STALE_MS) {
+  if(ready && touch_gesture.button.held) board_button_enqueue('r');
+  r1_touch_gesture_init(&touch_gesture,true,(uint32_t)current);
+ }
+#endif
 #if R1_BUTTON_GPIO >= 0
  bool button_down=!gpio_get_level(R1_BUTTON_GPIO);
  if(button_down!=board_button.raw) ESP_LOGI(TAG,"BUTTON_RAW down=%d ready=%d",button_down,ready);
@@ -499,7 +536,7 @@ static void board_inputs_poll(int64_t current) {
  if(nav_action==R1_NAV_DOWN) board_button_enqueue('j');
  if(nav_action==R1_NAV_UP) board_button_enqueue(nav_was_held?'U':'u');
 #endif
-#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
+#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
  if(!ready) {button_count=0;button_head=0;}
 #if R1_NAV_BUTTON_GPIO >= 0
  /* A repeat waiting behind another gesture must not outlive button release. */
@@ -548,6 +585,8 @@ static void dump_status(void) {
  ESP_LOGI(TAG,"STATUS probe=%s adv=%d tx_pending=%u source=%d selected=%d",R1_PROBE_VERSION,ble_gap_adv_active(),tx_count,source_enabled,selected_conn);
  struct r1_battery b=r1_battery_get();
  ESP_LOGI(TAG,"BATTERY valid=%d percent=%u filtered_mv=%u age_ms=%lld",b.valid,b.percent,b.millivolts,(long long)(b.valid?now_ms()-b.sample_ms:-1));
+ struct r1_touch_sample tp=r1_touch_hw_get();
+ ESP_LOGI(TAG,"TOUCH_PANEL enabled=%d valid=%d down=%d x=%u y=%u age_ms=%lld",R1_TOUCH_ENABLED,tp.valid,tp.down,tp.x,tp.y,(long long)(tp.ms?now_ms()-tp.ms:-1));
  log_bytes("TARGETS_LE_RAW",0,targets,sizeof(targets));
  for(unsigned i=0;i<3;i++) if(links[i].used) {
   struct link *l=&links[i];
@@ -662,7 +701,12 @@ static void on_reset(int reason) {ESP_LOGE(TAG,"HOST_RESET reason=%d",reason);me
 static void host_task(void *p) {(void)p;nimble_port_run();nimble_port_freertos_deinit();}
 void app_main(void) {
  board_inputs_init();
+ r1_i2c_init();
  r1_battery_init();
+#if R1_TOUCH_ENABLED
+ r1_touch_gesture_init(&touch_gesture,true,(uint32_t)now_ms());
+#endif
+ r1_touch_hw_init();
  /* Never auto-erase NVS on failure: persisted bonds must not silently vanish. */
  ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("r1test",NVS_READWRITE,&settings));
  _Static_assert(sizeof(R1_SERIAL)==16,"R1_SERIAL must be 15 ASCII bytes");
