@@ -1,7 +1,10 @@
-# v0.2.7: M5Stack StopWatch
+# v0.2.8: M5Stack StopWatch
 
 v0.2.6でStopWatchとG2の接続・全操作（short→long含む）の成功が報告されています。
-再起動後の自動再接続は未確認です。v0.2.7ではG2ボタン保持中のup繰り返しを追加しました。
+v0.2.7のup繰り返しも成功の報告があります。表示バージョン2.3.2.0007では、
+再起動後に数分経ってからG2が再接続した報告があります。遅延原因と安定性は未確定です。
+v0.2.8ではPM1から取得した電圧による推定残量%をアプリ/G2へ反映します。
+設定と確認手順はUPDATE_v0.2.8_ja.mdを参照してください。
 公式ピンマップは青KEYB=G1、黄KEYA=G2です。ユーザー指定のGPIOを優先して割り当てます。
 
 | 入力 | 操作 | 通知 / コンソール相当 |
@@ -42,7 +45,8 @@ UIによってスワイプの見え方は異なり、down/upの通知形式は�
 G1/G2は入力・内部プルアップ・active-lowとして読みます。
 StopWatchのボタンプルアップ電源とESP32-S3はL2に属し、公式資料ではM5PM1起動時に
 L1/L2/L3Aが自動的に有効になります。この版はボタンを直接GPIOで取得します。
-M5Unified、ディスプレイ、タッチ、音声、PM1/IO拡張のドライバを追加していません。
+M5Unified、ディスプレイ、タッチ、音声、IO拡張のドライバは使用していません。
+v0.2.8ではGPIO47/48のI2CでPM1の電圧レジスタのみ読み取ります。
 深いスリープ、電源管理・消費電力最適化は今回実装していません。
 
 旧M5DialのG40/G41エンコーダー、G46電源保持、G9バックライト制御はすべて無効です。
@@ -54,13 +58,14 @@ StopWatchではG46がAMOLEDのデータ線なので、M5Dialの電源保持設�
 従来の保守的な4MB / DIO / 40MHzのままです。公式StopWatchの物理Flashは16MBですが、
 今回のアプリは全容量を使う必要がありません。
 
-v0.2.6のプロジェクトから次を更新します。
+v0.2.7のプロジェクトから次を更新します。
 
 - CMakeLists.txt
 - src/main.c
-- src/r1_inputs.c
-- include/r1_inputs.h
-- include/r1_config.h（R1_NAV_BUTTON_REPEAT_MS追加、PROBE_VERSIONを0.2.7へ）
+- src/CMakeLists.txt
+- src/r1_battery.c、src/r1_battery_math.c（追加）
+- include/r1_battery.h（追加）
+- include/r1_config.h（残量設定追加、APP_VERSIONを2.3.2.0007、PROBE_VERSIONを0.2.8へ）
 
 SDKやGATT設定は維持します。StopWatchへの初回書き込みは、新しいプロジェクトの
 bootloaderとpartition tableも合わせるためapp-flashではなくflashを使用します。

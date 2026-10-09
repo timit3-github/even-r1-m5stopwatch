@@ -26,6 +26,7 @@ void ble_store_config_init(void);
 #include "r1_wire.h"
 #include "r1_legacy.h"
 #include "r1_inputs.h"
+#include "r1_battery.h"
 #if CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO
 #error "R1 v0.2.2 needs all four GAP PPCP settings zero. Run: python tools/configure_gatt_layout.py sdkconfig"
 #endif
@@ -163,7 +164,7 @@ static void reply(struct link *l,const struct r1_model *req,uint8_t status,const
 }
 static void status_notify(struct link *l) {
  struct r1_model m={.module=1,.serial=notification_serial++,.command=0,.subcommand=1};
- uint8_t p[7]={R1_BATTERY_PERCENT,2,1,0,0,0,0};reply(l,&m,2,p,sizeof(p));
+ uint8_t p[7]={r1_battery_get().percent,2,1,0,0,0,0};reply(l,&m,2,p,sizeof(p));
 }
 static bool save_blob(const char *key,const uint8_t *p,size_t n) {
  esp_err_t e=nvs_set_blob(settings,key,p,n);
@@ -192,7 +193,7 @@ static void dispatch(struct link *l,const struct r1_model *m) {
   advertise();break;
  }
  case 1: {
-  uint8_t pstatus[7]={R1_BATTERY_PERCENT,2,1,0,0,0,0};
+  uint8_t pstatus[7]={r1_battery_get().percent,2,1,0,0,0,0};
   reply(l,m,3,pstatus,sizeof(pstatus));break;
  }
  case 2: {
@@ -236,13 +237,17 @@ static void dispatch(struct link *l,const struct r1_model *m) {
  default: ESP_LOGW(TAG,"UNIMPLEMENTED_SYSTEM_SUBCOMMAND=%02x",m->subcommand);break;
  }
 }
+static void glasses_battery(struct link *l) {
+ /* Charge detection is not implemented; keep the existing boolean zero. */
+ const uint8_t p[6]={0,9,0x8b,0,r1_battery_get().percent,0};
+ queue_packet(l,tx1_handle,p,sizeof(p));
+}
 static void glasses_state(struct link *l) {
  if(!l->notify1) {l->initial_state_pending=true;return;}
  /* Legacy byte 5 is charging boolean, unlike the EUS state enum. */
- const uint8_t battery[6]={0,9,0x8b,0,R1_BATTERY_PERCENT,0};
  const uint8_t wear[5]={0,9,0x8c,0,1};
  if(tx_count>30) {l->initial_state_pending=true;return;}
- queue_packet(l,tx1_handle,battery,sizeof(battery));
+ glasses_battery(l);
  queue_packet(l,tx1_handle,wear,sizeof(wear));l->initial_state_pending=false;
 }
 static void legacy_dispatch(struct link *l,const uint8_t *p,size_t n) {
@@ -541,6 +546,8 @@ static void board_inputs_poll(int64_t current) {
 }
 static void dump_status(void) {
  ESP_LOGI(TAG,"STATUS probe=%s adv=%d tx_pending=%u source=%d selected=%d",R1_PROBE_VERSION,ble_gap_adv_active(),tx_count,source_enabled,selected_conn);
+ struct r1_battery b=r1_battery_get();
+ ESP_LOGI(TAG,"BATTERY valid=%d percent=%u filtered_mv=%u age_ms=%lld",b.valid,b.percent,b.millivolts,(long long)(b.valid?now_ms()-b.sample_ms:-1));
  log_bytes("TARGETS_LE_RAW",0,targets,sizeof(targets));
  for(unsigned i=0;i<3;i++) if(links[i].used) {
   struct link *l=&links[i];
@@ -592,6 +599,18 @@ static void tick(struct ble_npl_event *ev) {
  /* One command per tick so manual bursts do not starve the BLE host. */
  if(xQueueReceive(input_queue,&command,0)==pdTRUE) console_dispatch(command.text);
  int64_t current=now_ms();
+ /* The measurement task publishes a snapshot only. BLE stays on this host. */
+ static bool battery_sent;
+ static uint8_t battery_percent_sent;
+ static int64_t battery_sent_ms;
+ struct r1_battery b=r1_battery_get();
+ if(b.valid && tx_count<=24 && (!battery_sent || b.percent!=battery_percent_sent || current-battery_sent_ms>=R1_BATTERY_NOTIFY_MS)) {
+  for(unsigned i=0;i<3;i++) if(links[i].used) {
+   if(links[i].glasses && links[i].notify1) glasses_battery(&links[i]);
+   if(links[i].phone && links[i].encrypted && links[i].notify2 && !links[i].phone_auth_pending) status_notify(&links[i]);
+  }
+  battery_sent=true;battery_percent_sent=b.percent;battery_sent_ms=current;
+ }
  for(unsigned i=0;i<3;i++) if(links[i].used) {
   struct link *l=&links[i];
   if(l->rx.active && current-l->last_rx_ms>R1_REASSEMBLY_TIMEOUT_MS) {memset(&l->rx,0,sizeof(l->rx));ESP_LOGW(TAG,"RX_TIMEOUT conn=%u",l->handle);}
@@ -643,6 +662,7 @@ static void on_reset(int reason) {ESP_LOGE(TAG,"HOST_RESET reason=%d",reason);me
 static void host_task(void *p) {(void)p;nimble_port_run();nimble_port_freertos_deinit();}
 void app_main(void) {
  board_inputs_init();
+ r1_battery_init();
  /* Never auto-erase NVS on failure: persisted bonds must not silently vanish. */
  ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("r1test",NVS_READWRITE,&settings));
  _Static_assert(sizeof(R1_SERIAL)==16,"R1_SERIAL must be 15 ASCII bytes");

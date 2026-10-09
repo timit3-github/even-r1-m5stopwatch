@@ -206,3 +206,13 @@ SDK version has identical built-in service sizes. See UPDATE_v0.2.2_ja.md.
 - https://github.com/espressif/esp-nimble/blob/b45dcedcafb7888174c3567002c36b342ec0b723/nimble/host/services/gap/src/ble_svc_gap.c
 - https://github.com/espressif/esp-nimble/blob/b45dcedcafb7888174c3567002c36b342ec0b723/nimble/host/services/gatt/src/ble_svc_gatt.c
 - https://github.com/kalanihelekunihi/evenRealities-openCFW/blob/832137ec/g2/components/apollo_main/core_overlay/ble_ring_profile.c
+## v0.2.8 battery validation
+
+Wire, legacy, input and battery host suites pass with C11 -Wall -Wextra -Werror.
+Battery tests cover first reading, smoothing, percentage boundaries, invalid
+samples preserving the last successful value/timestamp, and invalid calibration.
+PM1 register address/endian/wake sequence and ESP-IDF 5.5.1 master API were
+checked against primary sources linked in UPDATE_v0.2.8_ja.md.
+No ESP32-S3 cross-build or battery hardware/UI verification was performed.
+User confirms v0.2.7 repeat and a delayed reboot reconnect with version 2.3.2.0007.
+

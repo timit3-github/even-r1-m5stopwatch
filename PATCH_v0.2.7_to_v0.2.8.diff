@@ -1,0 +1,438 @@
+--- a/even-r1-esp32s3/CMakeLists.txt
++++ b/even-r1-esp32s3/CMakeLists.txt
+@@ -1,4 +1,4 @@
+ cmake_minimum_required(VERSION 3.16)
+-set(PROJECT_VER "0.2.7")
++set(PROJECT_VER "0.2.8")
+ list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/src")
+ list(REMOVE_DUPLICATES EXTRA_COMPONENT_DIRS)
+--- a/even-r1-esp32s3/FLASH_ja.md
++++ b/even-r1-esp32s3/FLASH_ja.md
+@@ -2,5 +2,5 @@
+ 
+ 現在のStopWatch版はStopWatch_ja.mdの手順を参照してください。
+-v0.2.6からv0.2.7への更新はUPDATE_v0.2.7_ja.mdを参照してください。
++v0.2.7からv0.2.8への更新はUPDATE_v0.2.8_ja.mdを参照してください。
+ 新しいStopWatchへの初回書き込みはbootloader/partition tableも含むflashを使用します。
+ 以下は既存M5Dialプロジェクトの更新と、旧版からのGATT設定移行の説明です。
+--- a/even-r1-esp32s3/README_ja.md
++++ b/even-r1-esp32s3/README_ja.md
+@@ -1,3 +1,3 @@
+-# ESP32-S3 R1互換プロトコル試作 v0.2.7
++# ESP32-S3 R1互換プロトコル試作 v0.2.8
+ 
+ 対象は、純正R1を持たず、iPhoneの純正EvenアプリとG2で接続・操作を調べる環境です。
+@@ -9,7 +9,18 @@
+ 同版のtype 1→0ではメニューを開けませんでした。v0.2.5は専用type 9へ修正しました。
+ v0.2.6のStopWatchではG2接続・全操作（専用メニュー操作を含む）の成功が報告されています。
+-再起動後の自動再接続はまだ未確認です。M5Dialのv0.2.5接続不具合の原因も未確定です。
++v0.2.7のup繰り返しも成功の報告があります。表示バージョン2.3.2.0007では、
++StopWatch再起動後に数分経ってからG2が再接続した報告があります。
++再接続の遅延原因と安定性、M5Dialのv0.2.5接続不具合の原因は未確定です。
+ 公開解析の基準は主にG2 2.2.6.10 / R1 2.2.6.0009です。
+ この版は、旧版の既知の手順を実装し、現行版の要求をUSBログで観測するためのものです。
++
++## v0.2.7からの変更: バッテリー残量
++
++StopWatchのM5PM1からバッテリー電圧を読み、公式デモと同じ方法で推定した残量%を
++EvenアプリとG2へ送ります。1秒ごとに読み取り、%変化時と30秒ごとに通知します。
++statusでvalid・percent・filtered_mv・age_msを確認できます。
++充電状態の判定は従来のままです。取得不能時は最後の値、初回取得前は固定100%です。
++表示バージョンはユーザー現在の設定2.3.2.0007に合わせています。
++設定・更新・実機確認手順はUPDATE_v0.2.8_ja.mdを参照してください。
+ 
+ ## v0.2.6からの変更: up繰り返し
+--- a/even-r1-esp32s3/VALIDATION.md
++++ b/even-r1-esp32s3/VALIDATION.md
+@@ -207,2 +207,12 @@
+ - https://github.com/espressif/esp-nimble/blob/b45dcedcafb7888174c3567002c36b342ec0b723/nimble/host/services/gatt/src/ble_svc_gatt.c
+ - https://github.com/kalanihelekunihi/evenRealities-openCFW/blob/832137ec/g2/components/apollo_main/core_overlay/ble_ring_profile.c
++## v0.2.8 battery validation
++
++Wire, legacy, input and battery host suites pass with C11 -Wall -Wextra -Werror.
++Battery tests cover first reading, smoothing, percentage boundaries, invalid
++samples preserving the last successful value/timestamp, and invalid calibration.
++PM1 register address/endian/wake sequence and ESP-IDF 5.5.1 master API were
++checked against primary sources linked in UPDATE_v0.2.8_ja.md.
++No ESP32-S3 cross-build or battery hardware/UI verification was performed.
++User confirms v0.2.7 repeat and a delayed reboot reconnect with version 2.3.2.0007.
++
+--- a/even-r1-esp32s3/include/r1_config.h
++++ b/even-r1-esp32s3/include/r1_config.h
+@@ -18,11 +18,17 @@
+ #define R1_POWER_HOLD_GPIO -1 /* M5Dial GPIO46 must not be driven on StopWatch */
+ #define R1_DISPLAY_BACKLIGHT_GPIO -1 /* StopWatch uses AMOLED, no GPIO9 backlight */
+-/* Reverted for connection diagnosis. 2.3.2.9999 suppressed the app warning,
+- * but its possible effect on G2 connection is still unverified. */
+-#define R1_APP_VERSION "2.2.6.0009"
++/* User-tested version; reconnect after reboot may take several minutes. */
++#define R1_APP_VERSION "2.3.2.0007"
+ #define R1_HW_VERSION "603MV1.9.3"
+ /* Emulated identity; not a copied retail serial. Exactly 15 ASCII characters. */
+ #define R1_SERIAL "ESP32S3R1TST001"
+-#define R1_BATTERY_PERCENT 100
++#define R1_BATTERY_PERCENT 100 /* fallback until the first successful reading */
++#define R1_BATTERY_PM1_ENABLED 1 /* StopWatch only; set 0 for M5Dial */
++#define R1_BATTERY_SDA_GPIO 47
++#define R1_BATTERY_SCL_GPIO 48
++#define R1_BATTERY_POLL_MS 1000
++#define R1_BATTERY_NOTIFY_MS 30000 /* also notify when the estimated % changes */
++#define R1_BATTERY_EMPTY_MV 3300
++#define R1_BATTERY_FULL_MV 4200
+ #define R1_REASSEMBLY_TIMEOUT_MS 5000
+ /* Logging-only target checks until command/peer byte order is observed.
+@@ -30,4 +36,4 @@
+ #define R1_STRICT_TARGET_MATCH 0
+ /* Old stock has one live phone role and one live glasses role (3 link slots). */
+-#define R1_PROBE_VERSION "0.2.7"
++#define R1_PROBE_VERSION "0.2.8"
+ #define R1_TX_TIMEOUT_MS 5000
+--- a/even-r1-esp32s3/src/CMakeLists.txt
++++ b/even-r1-esp32s3/src/CMakeLists.txt
+@@ -1 +1 @@
+-idf_component_register(SRCS "main.c" "r1_wire.c" "r1_legacy.c" "r1_inputs.c" INCLUDE_DIRS "." "../include" REQUIRES bt nvs_flash driver esp_timer)
++idf_component_register(SRCS "main.c" "r1_wire.c" "r1_legacy.c" "r1_inputs.c" "r1_battery.c" "r1_battery_math.c" INCLUDE_DIRS "." "../include" REQUIRES bt nvs_flash driver esp_timer esp_driver_i2c)
+--- a/even-r1-esp32s3/src/main.c
++++ b/even-r1-esp32s3/src/main.c
+@@ -27,4 +27,5 @@
+ #include "r1_legacy.h"
+ #include "r1_inputs.h"
++#include "r1_battery.h"
+ #if CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO
+ #error "R1 v0.2.2 needs all four GAP PPCP settings zero. Run: python tools/configure_gatt_layout.py sdkconfig"
+@@ -164,5 +165,5 @@
+ static void status_notify(struct link *l) {
+  struct r1_model m={.module=1,.serial=notification_serial++,.command=0,.subcommand=1};
+- uint8_t p[7]={R1_BATTERY_PERCENT,2,1,0,0,0,0};reply(l,&m,2,p,sizeof(p));
++ uint8_t p[7]={r1_battery_get().percent,2,1,0,0,0,0};reply(l,&m,2,p,sizeof(p));
+ }
+ static bool save_blob(const char *key,const uint8_t *p,size_t n) {
+@@ -193,5 +194,5 @@
+  }
+  case 1: {
+-  uint8_t pstatus[7]={R1_BATTERY_PERCENT,2,1,0,0,0,0};
++  uint8_t pstatus[7]={r1_battery_get().percent,2,1,0,0,0,0};
+   reply(l,m,3,pstatus,sizeof(pstatus));break;
+  }
+@@ -237,11 +238,15 @@
+  }
+ }
++static void glasses_battery(struct link *l) {
++ /* Charge detection is not implemented; keep the existing boolean zero. */
++ const uint8_t p[6]={0,9,0x8b,0,r1_battery_get().percent,0};
++ queue_packet(l,tx1_handle,p,sizeof(p));
++}
+ static void glasses_state(struct link *l) {
+  if(!l->notify1) {l->initial_state_pending=true;return;}
+  /* Legacy byte 5 is charging boolean, unlike the EUS state enum. */
+- const uint8_t battery[6]={0,9,0x8b,0,R1_BATTERY_PERCENT,0};
+  const uint8_t wear[5]={0,9,0x8c,0,1};
+  if(tx_count>30) {l->initial_state_pending=true;return;}
+- queue_packet(l,tx1_handle,battery,sizeof(battery));
++ glasses_battery(l);
+  queue_packet(l,tx1_handle,wear,sizeof(wear));l->initial_state_pending=false;
+ }
+@@ -542,4 +547,6 @@
+ static void dump_status(void) {
+  ESP_LOGI(TAG,"STATUS probe=%s adv=%d tx_pending=%u source=%d selected=%d",R1_PROBE_VERSION,ble_gap_adv_active(),tx_count,source_enabled,selected_conn);
++ struct r1_battery b=r1_battery_get();
++ ESP_LOGI(TAG,"BATTERY valid=%d percent=%u filtered_mv=%u age_ms=%lld",b.valid,b.percent,b.millivolts,(long long)(b.valid?now_ms()-b.sample_ms:-1));
+  log_bytes("TARGETS_LE_RAW",0,targets,sizeof(targets));
+  for(unsigned i=0;i<3;i++) if(links[i].used) {
+@@ -593,4 +600,16 @@
+  if(xQueueReceive(input_queue,&command,0)==pdTRUE) console_dispatch(command.text);
+  int64_t current=now_ms();
++ /* The measurement task publishes a snapshot only. BLE stays on this host. */
++ static bool battery_sent;
++ static uint8_t battery_percent_sent;
++ static int64_t battery_sent_ms;
++ struct r1_battery b=r1_battery_get();
++ if(b.valid && tx_count<=24 && (!battery_sent || b.percent!=battery_percent_sent || current-battery_sent_ms>=R1_BATTERY_NOTIFY_MS)) {
++  for(unsigned i=0;i<3;i++) if(links[i].used) {
++   if(links[i].glasses && links[i].notify1) glasses_battery(&links[i]);
++   if(links[i].phone && links[i].encrypted && links[i].notify2 && !links[i].phone_auth_pending) status_notify(&links[i]);
++  }
++  battery_sent=true;battery_percent_sent=b.percent;battery_sent_ms=current;
++ }
+  for(unsigned i=0;i<3;i++) if(links[i].used) {
+   struct link *l=&links[i];
+@@ -644,4 +663,5 @@
+ void app_main(void) {
+  board_inputs_init();
++ r1_battery_init();
+  /* Never auto-erase NVS on failure: persisted bonds must not silently vanish. */
+  ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("r1test",NVS_READWRITE,&settings));
+--- a/even-r1-esp32s3/tests/run_host_tests.sh
++++ b/even-r1-esp32s3/tests/run_host_tests.sh
+@@ -7,5 +7,7 @@
+ cc -std=c11 -Wall -Wextra -Werror -I include src/r1_legacy.c tests/test_legacy.c -o "$test_dir/legacy"
+ cc -std=c11 -Wall -Wextra -Werror -I include src/r1_inputs.c tests/test_inputs.c -o "$test_dir/inputs"
++cc -std=c11 -Wall -Wextra -Werror -I include src/r1_battery_math.c tests/test_battery.c -o "$test_dir/battery"
+ "$test_dir/wire"
+ "$test_dir/legacy"
+ "$test_dir/inputs"
++"$test_dir/battery"
+--- a/even-r1-esp32s3/StopWatch_ja.md
++++ b/even-r1-esp32s3/StopWatch_ja.md
+@@ -1,6 +1,9 @@
+-# v0.2.7: M5Stack StopWatch
++# v0.2.8: M5Stack StopWatch
+ 
+ v0.2.6でStopWatchとG2の接続・全操作（short→long含む）の成功が報告されています。
+-再起動後の自動再接続は未確認です。v0.2.7ではG2ボタン保持中のup繰り返しを追加しました。
++v0.2.7のup繰り返しも成功の報告があります。表示バージョン2.3.2.0007では、
++再起動後に数分経ってからG2が再接続した報告があります。遅延原因と安定性は未確定です。
++v0.2.8ではPM1から取得した電圧による推定残量%をアプリ/G2へ反映します。
++設定と確認手順はUPDATE_v0.2.8_ja.mdを参照してください。
+ 公式ピンマップは青KEYB=G1、黄KEYA=G2です。ユーザー指定のGPIOを優先して割り当てます。
+ 
+@@ -43,5 +46,6 @@
+ StopWatchのボタンプルアップ電源とESP32-S3はL2に属し、公式資料ではM5PM1起動時に
+ L1/L2/L3Aが自動的に有効になります。この版はボタンを直接GPIOで取得します。
+-M5Unified、ディスプレイ、タッチ、音声、PM1/IO拡張のドライバを追加していません。
++M5Unified、ディスプレイ、タッチ、音声、IO拡張のドライバは使用していません。
++v0.2.8ではGPIO47/48のI2CでPM1の電圧レジスタのみ読み取ります。
+ 深いスリープ、電源管理・消費電力最適化は今回実装していません。
+ 
+@@ -55,11 +59,12 @@
+ 今回のアプリは全容量を使う必要がありません。
+ 
+-v0.2.6のプロジェクトから次を更新します。
++v0.2.7のプロジェクトから次を更新します。
+ 
+ - CMakeLists.txt
+ - src/main.c
+-- src/r1_inputs.c
+-- include/r1_inputs.h
+-- include/r1_config.h（R1_NAV_BUTTON_REPEAT_MS追加、PROBE_VERSIONを0.2.7へ）
++- src/CMakeLists.txt
++- src/r1_battery.c、src/r1_battery_math.c（追加）
++- include/r1_battery.h（追加）
++- include/r1_config.h（残量設定追加、APP_VERSIONを2.3.2.0007、PROBE_VERSIONを0.2.8へ）
+ 
+ SDKやGATT設定は維持します。StopWatchへの初回書き込みは、新しいプロジェクトの
+--- a/even-r1-esp32s3/src/r1_battery.c
++++ b/even-r1-esp32s3/src/r1_battery.c
+@@ -0,0 +1,82 @@
++#include "r1_battery.h"
++#include "r1_config.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++#include "esp_timer.h"
++#include "esp_log.h"
++#if R1_BATTERY_PM1_ENABLED
++#include "driver/i2c_master.h"
++#endif
++static portMUX_TYPE battery_lock=portMUX_INITIALIZER_UNLOCKED;
++static struct r1_battery battery={.percent=R1_BATTERY_PERCENT};
++struct r1_battery r1_battery_get(void) {
++ portENTER_CRITICAL(&battery_lock);
++ struct r1_battery copy=battery;
++ portEXIT_CRITICAL(&battery_lock);
++ return copy;
++}
++#if R1_BATTERY_PM1_ENABLED
++_Static_assert(R1_BATTERY_POLL_MS>=100,"battery polling period too short");
++_Static_assert(R1_BATTERY_FULL_MV>R1_BATTERY_EMPTY_MV,"invalid battery voltage range");
++static i2c_master_bus_handle_t bus;
++static i2c_master_dev_handle_t pm1;
++/* PM1 readVbat returns little-endian millivolts at register 0x22.
++ * No power, charging, watchdog, GPIO or I2C configuration registers are written. */
++static esp_err_t read_voltage(uint16_t *mv) {
++ (void)i2c_master_probe(bus,0x6e,50); /* START/address wakes sleeping PM1 */
++ vTaskDelay(pdMS_TO_TICKS(10));
++ const uint8_t reg=0x22;
++ uint8_t bytes[2];
++ esp_err_t e=ESP_FAIL;
++ for(unsigned i=0;i<3;i++) {
++  e=i2c_master_transmit_receive(pm1,&reg,1,bytes,2,100);
++  if(e==ESP_OK) {*mv=(uint16_t)bytes[0]|((uint16_t)bytes[1]<<8);return e;}
++  vTaskDelay(pdMS_TO_TICKS(10));
++ }
++ return e;
++}
++static esp_err_t set_host_speed(uint32_t speed) {
++ if(pm1) {esp_err_t e=i2c_master_bus_rm_device(pm1);if(e!=ESP_OK) return e;pm1=NULL;}
++ i2c_device_config_t cfg={.dev_addr_length=I2C_ADDR_BIT_LEN_7,
++  .device_address=0x6e,.scl_speed_hz=speed};
++ return i2c_master_bus_add_device(bus,&cfg,&pm1);
++}
++static void battery_task(void *unused) {
++ (void)unused;
++ i2c_master_bus_config_t cfg={.i2c_port=I2C_NUM_0,
++  .sda_io_num=R1_BATTERY_SDA_GPIO,.scl_io_num=R1_BATTERY_SCL_GPIO,
++  .clk_source=I2C_CLK_SRC_DEFAULT,.glitch_ignore_cnt=7,.flags.enable_internal_pullup=true};
++ esp_err_t e=i2c_new_master_bus(&cfg,&bus);
++ if(e!=ESP_OK) {ESP_LOGE("R1BAT","I2C_INIT_FAILED %s; fallback=%d",esp_err_to_name(e),R1_BATTERY_PERCENT);vTaskDelete(NULL);return;}
++ uint32_t speed=100000;
++ e=set_host_speed(speed);
++ if(e!=ESP_OK) {ESP_LOGE("R1BAT","PM1_ADD_FAILED %s",esp_err_to_name(e));i2c_del_master_bus(bus);vTaskDelete(NULL);return;}
++ struct r1_battery state={0};
++ unsigned failures=0;
++ for(;;) {
++  uint16_t mv=0;
++  e=read_voltage(&mv);
++  if(e==ESP_OK && r1_battery_update(&state,mv,esp_timer_get_time()/1000,
++                                   R1_BATTERY_EMPTY_MV,R1_BATTERY_FULL_MV)) {
++   struct r1_battery old=r1_battery_get();
++   portENTER_CRITICAL(&battery_lock);battery=state;portEXIT_CRITICAL(&battery_lock);
++   if(!old.valid || old.percent!=state.percent || failures)
++    ESP_LOGI("R1BAT","BATTERY mv=%u filtered_mv=%u percent=%u i2c_hz=%lu",mv,state.millivolts,state.percent,(unsigned long)speed);
++   failures=0;
++  } else {
++   if(failures++%30==0) ESP_LOGW("R1BAT","BATTERY_READ_FAILED error=%s mv=%u valid=%d; retaining last value (initial fallback=%d)",esp_err_to_name(e),mv,state.valid,R1_BATTERY_PERCENT);
++   /* Match official driver's 100K/400K recovery, changing host speed only. */
++   speed=speed==100000?400000:100000;
++   e=set_host_speed(speed);
++   if(e!=ESP_OK) {ESP_LOGE("R1BAT","PM1_READD_FAILED %s",esp_err_to_name(e));i2c_del_master_bus(bus);vTaskDelete(NULL);return;}
++  }
++  vTaskDelay(pdMS_TO_TICKS(R1_BATTERY_POLL_MS));
++ }
++}
++#endif
++void r1_battery_init(void) {
++#if R1_BATTERY_PM1_ENABLED
++ if(xTaskCreate(battery_task,"r1_battery",3072,NULL,1,NULL)!=pdPASS)
++  ESP_LOGE("R1BAT","BATTERY_TASK_FAILED; fallback=%d",R1_BATTERY_PERCENT);
++#endif
++}
+--- a/even-r1-esp32s3/src/r1_battery_math.c
++++ b/even-r1-esp32s3/src/r1_battery_math.c
+@@ -0,0 +1,12 @@
++#include "r1_battery.h"
++#include <stddef.h>
++bool r1_battery_update(struct r1_battery *s,uint16_t mv,int64_t now,
++                       uint16_t empty,uint16_t full) {
++ /* Reject missing/implausible LiPo readings; preserve the last good sample. */
++ if(!s || mv<2500 || mv>4500 || full<=empty) return false;
++ uint16_t filtered=s->valid?(uint16_t)(((uint32_t)s->millivolts*7+mv+4)/8):mv;
++ uint8_t percent=filtered<=empty?0:filtered>=full?100:
++  (uint8_t)(((uint32_t)filtered-empty)*100/(full-empty));
++ *s=(struct r1_battery){.valid=true,.percent=percent,.millivolts=filtered,.sample_ms=now};
++ return true;
++}
+--- a/even-r1-esp32s3/include/r1_battery.h
++++ b/even-r1-esp32s3/include/r1_battery.h
+@@ -0,0 +1,14 @@
++#pragma once
++#include <stdbool.h>
++#include <stdint.h>
++struct r1_battery {
++ bool valid;
++ uint8_t percent;
++ uint16_t millivolts;
++ int64_t sample_ms;
++};
++void r1_battery_init(void);
++struct r1_battery r1_battery_get(void);
++/* Pure conversion/filter, also used by the host tests. */
++bool r1_battery_update(struct r1_battery *state,uint16_t mv,int64_t now_ms,
++                       uint16_t empty_mv,uint16_t full_mv);
+--- a/even-r1-esp32s3/tests/test_battery.c
++++ b/even-r1-esp32s3/tests/test_battery.c
+@@ -0,0 +1,24 @@
++#include "r1_battery.h"
++#include <assert.h>
++#include <stdio.h>
++int main(void) {
++ struct r1_battery b={.percent=100};
++ assert(!r1_battery_update(&b,0,1000,3300,4200));
++ assert(!b.valid && b.percent==100);
++ assert(r1_battery_update(&b,3750,2000,3300,4200));
++ assert(b.valid && b.percent==50 && b.millivolts==3750);
++ assert(r1_battery_update(&b,3830,3000,3300,4200));
++ assert(b.millivolts==3760 && b.percent==51 && b.sample_ms==3000);
++ assert(!r1_battery_update(&b,65535,4000,3300,4200));
++ assert(b.millivolts==3760 && b.sample_ms==3000);
++ assert(!r1_battery_update(&b,3700,4000,4200,3300));
++ assert(!r1_battery_update(NULL,3700,4000,3300,4200));
++ const uint16_t mv[]={2500,3300,3309,4200,4500};
++ const uint8_t expected[]={0,0,1,100,100};
++ for(unsigned i=0;i<5;i++) {
++  b=(struct r1_battery){0};
++  assert(r1_battery_update(&b,mv[i],5000,3300,4200));
++  assert(b.percent==expected[i]);
++ }
++ puts("battery tests passed");
++}
+--- a/even-r1-esp32s3/UPDATE_v0.2.8_ja.md
++++ b/even-r1-esp32s3/UPDATE_v0.2.8_ja.md
+@@ -0,0 +1,78 @@
++# v0.2.8: StopWatchのバッテリー残量
++
++M5PM1のI2Cアドレス0x6E、VBATレジスタ0x22/0x23から電圧(mV)を読み、
++R1の残量としてEvenアプリのdeviceStatusとG2の旧形式0x8Bに反映します。
++StopWatch内蔵バスはSDA=GPIO47、SCL=GPIO48です。M5Unifiedは不要です。
++電源・充電器・PM1のGPIO・ウォッチドッグの設定レジスタには書き込みません。
++読み取りは別タスクで行い、BLE通知は従来どおりNimBLEホストで行います。
++
++## 残量の意味と更新
++
++StopWatch公式UserDemoと同じ、3300mV=0%、4200mV=100%の直線換算です。
++初回はそのまま採用し、以降は前回7:新規1の電圧平滑化を行います。
++精密な電池残量計ではありません。充電中・負荷・電池の状態によって誤差があります。
++充電中/満充電アイコンの判定は未実装で、既存の「非充電」値を維持します。
++
++1秒ごとに測定し、%が変わったときと30秒ごとに購読済みの接続へ通知します。
++初回接続時の状態通知と、アプリからの状態取得にも最新値を使います。
++アプリ画面の表示更新時期はアプリ側の処理によります。
++取得失敗時は前回の正常値を保持します。まだ一度も読めていない場合は従来の固定100%を使い、
++ログに失敗を表示します。これは実測100%を意味しません。
++2500mV未満/4500mV超の値は異常値として採用しません。
++PM1の睡眠復帰のためSTART/addressで起こし、失敗時はホストの100kHz/400kHzを切り替えて再試行します。
++
++`status` の例（値は例示）:
++
++```text
++BATTERY valid=1 percent=50 filtered_mv=3750 age_ms=200
++```
++
++valid=1は正常値を少なくとも一度取得した状態です。age_msが増え続ける場合は読み取りが止まっています。
++valid=0、age_ms=-1は未取得です。成功時はR1BATのBATTERYログも出ます。
++充電ケーブルを抜いた状態で電圧・%・アプリ表示を比較してください。
++
++## 設定
++
++include/r1_config.h:
++
++```c
++#define R1_BATTERY_PM1_ENABLED 1
++#define R1_BATTERY_SDA_GPIO 47
++#define R1_BATTERY_SCL_GPIO 48
++#define R1_BATTERY_POLL_MS 1000
++#define R1_BATTERY_NOTIFY_MS 30000
++#define R1_BATTERY_EMPTY_MV 3300
++#define R1_BATTERY_FULL_MV 4200
++```
++
++M5DialなどPM1のないボードではR1_BATTERY_PM1_ENABLEDを0にしてください。
++実測未取得/無効時の固定値はR1_BATTERY_PERCENTです。
++アプリへ返すバージョンはユーザー現在の設定に合わせ2.3.2.0007へ変更しています。
++v0.2.7のup繰り返しは実機成功の報告があり、同じ操作処理を維持します。
++このバージョン表示でStopWatch再起動後、数分後にG2へ再接続した報告があります。
++再接続の遅延原因と安定性はまだ未確定です。
++
++## 更新と確認
++
++同梱ソース一式に更新し、ご自身で変更している設定はr1_config.hへ反映してください。
++差分はPATCH_v0.2.7_to_v0.2.8.diffです。新しいCソースとヘッダ、src/CMakeLists.txtも必要です。
++NVSの消去やペアリング解除は不要です。
++
++```sh
++idf.py clean
++idf.py build
++idf.py -p COM5 flash
++idf.py -p COM5 monitor
++```
++
++COM5は実際のポートへ置き換えます。起動時PROBE_VERSION=0.2.8とBATTERYログを確認し、
++statusのvalid=1とアプリのR1残量を比較します。読み取り/表示の実機確認は未実施です。
++ホストで既存wire/legacy/inputテストと新規電圧換算・異常値保持テストを確認しています。
++この環境にはESP-IDFのクロスツールチェーンがなく、ESP32-S3ビルドは未実施です。
++
++## 公式参照
++
++- [StopWatchピンマップ](https://docs.m5stack.com/ja/core/StopWatch)
++- [M5PM1ドライバ](https://github.com/m5stack/M5PM1/tree/be9a5456c007c333e7ac963f33bfde1ffa5d82ee/src): readVbat、_readReg16、I2C wake/retry。
++- [StopWatch公式残量換算](https://github.com/m5stack/M5StopWatch-UserDemo/blob/6b4aa125288b6fe9dca661f10159f6e1e5ee785c/main/hal/hal_pmic.cpp): battery_millivolts_to_percent、update_bat_level_from_mv。
++- [ESP-IDF 5.5.1 I2C API](https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2c.html)
