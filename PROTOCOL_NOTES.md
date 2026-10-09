@@ -1,8 +1,22 @@
-# Protocol evidence and implementation choices (v0.2)
+# Protocol evidence and implementation choices (v0.2.1)
 
 The primary reference is stock R1 2.2.6.0009 and the reconstruction of stock
 G2 2.2.6.10 in evenRealities-openCFW. These are not observations of the user's
-app 2.3.2 / G2 2.3.2.14. No R1 or G2 hardware is available to the implementer.
+app 2.3.2 / G2 2.3.2.14, except for the user-supplied endpoint log below.
+No R1 or G2 hardware is directly available to the implementer.
+
+## Actual iPhone pairAuth request, 2026-10-09
+
+The user's v0.2 ESP-IDF 5.5.1 hardware log contains:
+`00 57 0e 23 01 64 01 64 01 00 00 00 08 0d 00 26 b1 01`.
+The fragment CRC32 is 0x01230E57. The 13-byte model is module 1,
+command 0, subcommand 8, serial 1, payload 01. Its checksum is 0xB126:
+CRC16/MODBUS, initial 0xFFFF, reflected polynomial 0xA001, over all model
+bytes with positions 10 and 11 treated as zero. The compact CCITT calculation
+instead produces 0x013F. v0.2 rejected this valid frame because it only
+accepted compact CCITT on receive. v0.2.1 validates both schemes and logs
+the matching scheme. This one observation does not establish the scheme
+for every subsequent command or successful pairing. Outgoing MODBUS is unchanged.
 
 ## Legacy 0x88: internal event, not an on-wire fixed auth byte
 

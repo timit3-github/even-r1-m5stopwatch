@@ -1,11 +1,21 @@
-# ESP32-S3 R1互換プロトコル試作 v0.2
+# ESP32-S3 R1互換プロトコル試作 v0.2.1
 
 対象は、純正R1を持たず、iPhoneの純正EvenアプリとG2で接続・操作を調べる環境です。
 アプリ v2.3.2 / G2 v2.3.2.14 での実機成功はまだ確認していません。
 公開解析の基準は主にG2 2.2.6.10 / R1 2.2.6.0009です。
 この版は、旧版の既知の手順を実装し、現行版の要求をUSBログで観測するためのものです。
 
-## v0.1からの変更
+## v0.2からの修正
+
+実機ログの最初のpairAuth要求はモデル全体のCRC16/MODBUSを使用していました。
+v0.2は受信モデルにcompact CCITTのみを認めていたため、この要求を拒否しました。
+v0.2.1は両形式のCRCを検証して受け付け、採用した形式を`MODEL_CHECKSUM`で表示します。
+CRC検証を省略する修正ではありません。送信モデルのMODBUS形式は従来どおりです。
+実際の18バイトを固定テストに追加し、pairAuthとして読めることを確認しました。
+登録完了・暗号化・G2操作の実機確認は次の試験で行います。
+更新方法と期待するログは`UPDATE_v0.2.1_ja.md`を参照してください。
+
+## v0.1からv0.2の変更
 
 - G2の旧形式コマンド `0x88` をメガネ役割の内部イベントとして処理。
   値 `2` は無線通知そのものではないため、架空の `0x88` 応答は送信しません。
@@ -29,7 +39,7 @@
 - GAP名 `EVEN R1_XXXXXX`、appearance 0x0240。
 - 広告：flags/name/appearance。scan response：company 0x5245、自身のアドレス、15文字の試作シリアル。
 - BAE80001サービス、BAE80010/12 Write Without Response、BAE80011/13 NotifyとCCCD。
-- EUS断片再構成、非反転CRC-32C、phone compact CCITT、ring MODBUS。
+- EUS断片再構成、非反転CRC-32C、受信compact CCITT / full-model MODBUS、送信MODBUS。
 - deviceStatus、deviceInfo、deviceSerial、wearStatus、phone pairAuth。
 - userInfo、systemTime、touchSwitch、advStart、healthSettings / systemSettings。
   設定の保存・読み出しだけを行い、健康計測や電源回路の動作は再現しません。
@@ -54,13 +64,13 @@
 - EUS再構成は連続した降順と同一CRCを要求します。旧stockの重複断片の置き換えは再現していません。
 - 表示するバッテリー100%・非充電・装着中は試作の固定値です。センサー測定値ではありません。
 - シリアル `ESP32S3R1TST001` は15文字の試作識別子です。
-  deviceInfoの旧版値はプロトコル再現用で、ESPの実際の版は起動時の `PROBE_VERSION=0.2` です。
+  deviceInfoの旧版値はプロトコル再現用で、ESPの実際の版は起動時の `PROBE_VERSION=0.2.1` です。
 
 ## 書き込み
 
-ビルド済みバイナリと書き込みスクリプトも同梱しています。
-最初の試験は `FLASH_ja.md` の方法ならESP-IDFの導入なしで行えます。
-ソースから変更・ビルドする場合は以下の方法を使います。
+このv0.2.1配布はソース版です。旧v0.2のバイナリは含めていません。
+現在お使いのESP-IDF環境での更新方法は `FLASH_ja.md` を参照してください。
+PlatformIOでビルドする場合は以下の方法を使います。
 
 PCにVS Code + PlatformIO、またはPlatformIO CLIを用意します。
 iPhone用アプリ開発環境・Xcode・Apple Developer契約は不要です。

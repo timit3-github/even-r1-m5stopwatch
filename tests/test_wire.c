@@ -16,6 +16,27 @@ int main(void) {
  uint8_t generated[244];size_t flen=r1_fragment(req,sizeof(req),0,generated,sizeof(generated));
  assert(flen==sizeof(oracle) && !memcmp(generated,oracle,sizeof(oracle)));
  struct r1_model m;assert(r1_decode(req,sizeof(req),&m));assert(m.serial==0x3f00 && m.subcommand==8 && m.payload_len==1 && m.payload[0]==1);
+ assert(m.checksum_scheme==R1_CHECKSUM_COMPACT_CCITT);
+ /* Actual iPhone app 2.3.2 -> ESP32-S3 log, 2026-10-09. */
+ const uint8_t actual[]={0x00,0x57,0x0e,0x23,0x01,0x64,0x01,0x64,0x01,0x00,0x00,0x00,0x08,0x0d,0x00,0x26,0xb1,0x01};
+ struct r1_rx captured={0};
+ assert(r1_crc32(actual+5,sizeof(actual)-5)==0x01230e57);
+ assert(r1_receive(&captured,actual,sizeof(actual))==1);
+ assert(r1_model_modbus(captured.data,captured.used)==0xb126);
+ assert(r1_phone_checksum(captured.data,captured.used)==0x013f);
+ assert(!memcmp(captured.data,actual+5,captured.used));
+ assert(r1_decode(captured.data,captured.used,&m));
+ assert(m.checksum_scheme==R1_CHECKSUM_MODEL_MODBUS && m.module==1 && m.serial==1 && m.status==0 && m.command==0 && m.subcommand==8 && m.payload_len==1 && m.payload[0]==1);
+ uint8_t corrupt[sizeof(actual)-5];memcpy(corrupt,actual+5,sizeof(corrupt));
+ corrupt[12]^=1;
+ uint8_t reframed[sizeof(actual)];assert(r1_fragment(corrupt,sizeof(corrupt),0,reframed,sizeof(reframed))==sizeof(actual));
+ assert(r1_receive(&captured,reframed,sizeof(reframed))==1);
+ assert(!r1_decode(captured.data,captured.used,&m));
+ memcpy(corrupt,actual+5,sizeof(corrupt));corrupt[10]^=1;assert(!r1_decode(corrupt,sizeof(corrupt),&m));
+ memcpy(corrupt,actual+5,sizeof(corrupt));corrupt[8]=12;assert(!r1_decode(corrupt,sizeof(corrupt),&m));
+ memcpy(corrupt,actual+5,sizeof(corrupt));corrupt[0]=99;assert(!r1_decode(corrupt,sizeof(corrupt),&m));
+ assert(!r1_decode(NULL,13,&m) && !r1_decode(actual+5,13,NULL));
+ assert(r1_decode(req,sizeof(req),&m));
  uint8_t reply[64];const uint8_t ok=0;size_t n=r1_encode(&m,3,&ok,1,reply,sizeof(reply));assert(n==13 && reply[5]==3 && reply[3]==0 && reply[4]==0x3f);
  uint16_t reply_sum=reply[10]|reply[11]<<8;reply[10]=reply[11]=0;assert(reply_sum==r1_modbus(reply,n));
  uint8_t data[R1_MESSAGE_MAX],f[244];for(size_t i=0;i<sizeof(data);i++)data[i]=(uint8_t)(i*17+3);
@@ -30,5 +51,5 @@ int main(void) {
  n=r1_fragment(data,13,0,f,sizeof(f));f[5]^=1;assert(r1_receive(&s,f,n)==-1);
  assert(r1_receive(&s,f,4)==-1);f[0]=17;assert(r1_receive(&s,f,5)==-1);
  req[12]^=1;assert(!r1_decode(req,sizeof(req),&m));
- puts("wire tests passed: CRC, model, fragmentation, corrupt CRC, sequence bounds");
+ puts("wire tests passed: actual iPhone MODBUS replay, compact CCITT, CRC, fragmentation, corruption, sequence bounds");
 }

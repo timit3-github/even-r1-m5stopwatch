@@ -11,5 +11,5 @@
  * Set 1 to reject a glasses role on an exact peer-address mismatch. */
 #define R1_STRICT_TARGET_MATCH 0
 /* Old stock has one live phone role and one live glasses role (3 link slots). */
-#define R1_PROBE_VERSION "0.2"
+#define R1_PROBE_VERSION "0.2.1"
 #define R1_TX_TIMEOUT_MS 5000

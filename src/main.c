@@ -104,6 +104,9 @@ static bool save_blob(const char *key,const uint8_t *p,size_t n) {
  return e==ESP_OK;
 }
 static void dispatch(struct link *l,const struct r1_model *m) {
+ const char *checksum=m->checksum_scheme==R1_CHECKSUM_MODEL_MODBUS?"MODEL_MODBUS":
+   m->checksum_scheme==R1_CHECKSUM_COMPACT_CCITT?"COMPACT_CCITT":"AMBIGUOUS";
+ ESP_LOGI(TAG,"MODEL_CHECKSUM conn=%u scheme=%s",l->handle,checksum);
  ESP_LOGI(TAG,"MODEL conn=%u module=%u version=%u cmd=%02x sub=%02x seq=%u status=%02x payload=%u",l->handle,m->module,m->module_version,m->command,m->subcommand,m->serial,m->status,(unsigned)m->payload_len);
  const uint8_t *p=m->payload;size_t n=m->payload_len;
  /* Result-code numbers beyond success have not been recovered. Unknown
@@ -219,7 +222,14 @@ static int gatt_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *
  if(result==1) {
   struct r1_model m;
   if(r1_decode(l->rx.data,l->rx.used,&m)) dispatch(l,&m);
-  else {ESP_LOGW(TAG,"REJECTED_MODEL_OR_COMPACT_CRC");log_bytes("BAD_MODEL",conn,l->rx.data,l->rx.used);}
+  else {
+   ESP_LOGW(TAG,"REJECTED_MODEL_OR_CRC");
+   if(l->rx.used>=12) {
+    const uint8_t *p=l->rx.data;
+    ESP_LOGW(TAG,"MODEL_CRC received=%04x compact=%04x modbus=%04x",p[10]|p[11]<<8,r1_phone_checksum(p,l->rx.used),r1_model_modbus(p,l->rx.used));
+   }
+   log_bytes("BAD_MODEL",conn,l->rx.data,l->rx.used);
+  }
  }
  return 0;
 }
