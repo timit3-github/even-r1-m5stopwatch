@@ -50,6 +50,7 @@ static struct r1_button board_button;
 #endif
 #if R1_NAV_BUTTON_GPIO >= 0
 static struct r1_button nav_button;
+static uint32_t nav_last_up_ms;
 #endif
 #if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
 static char button_pending[8];
@@ -431,6 +432,7 @@ static void gesture(char c) {
  case 'h':touch_event(0,0,0);break;
  case 'm':touch_event(9,0,0);break; /* Newer R1 tap-then-long report. */
  case 'u':touch_event(4,1,1);break;
+ case 'U':touch_event(4,1,1);break; /* Internal cancelable navigation repeat. */
  case 'j':touch_event(5,1,1);break;
  case 'r':touch_event(8,0,0);break;
  default:break;
@@ -438,9 +440,22 @@ static void gesture(char c) {
 }
 #if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
 static void board_button_enqueue(char command) {
+ /* Retain at most one repeat while other inputs occupy the pacing queue. */
+ if(command=='U') for(unsigned i=0;i<button_count;i++)
+  if(button_pending[(button_head+i)%sizeof(button_pending)]=='U') return;
  if(button_count==sizeof(button_pending)) {ESP_LOGW(TAG,"BUTTON_QUEUE_FULL");return;}
  button_pending[(button_head+button_count)%sizeof(button_pending)]=command;button_count++;
 }
+#if R1_NAV_BUTTON_GPIO >= 0
+static void board_button_cancel_repeats(void) {
+ unsigned kept=0;
+ for(unsigned i=0;i<button_count;i++) {
+  char command=button_pending[(button_head+i)%sizeof(button_pending)];
+  if(command!='U') button_pending[(button_head+kept++)%sizeof(button_pending)]=command;
+ }
+ button_count=kept;
+}
+#endif
 #endif
 static void board_inputs_poll(int64_t current) {
  bool ready=false;
@@ -470,19 +485,33 @@ static void board_inputs_poll(int64_t current) {
  if(nav_down!=nav_button.raw) ESP_LOGI(TAG,"NAV_BUTTON_RAW down=%d ready=%d",nav_down,ready);
  if(!ready) r1_button_init(&nav_button,nav_down,(uint32_t)current);
  bool nav_was_stable=nav_button.stable;
+ bool nav_was_held=nav_button.held;
  unsigned nav_action=r1_nav_button_update(&nav_button,nav_down,(uint32_t)current,
-   R1_BUTTON_DEBOUNCE_MS,R1_NAV_BUTTON_HOLD_MS);
+   R1_BUTTON_DEBOUNCE_MS,R1_NAV_BUTTON_HOLD_MS,R1_NAV_BUTTON_REPEAT_MS);
  if(nav_button.stable!=nav_was_stable)
   ESP_LOGI(TAG,"NAV_BUTTON_EDGE down=%d ready=%d held=%d",nav_button.stable,ready,nav_button.held);
- if(nav_action) ESP_LOGI(TAG,"NAV_BUTTON action=%s",nav_action==R1_NAV_UP?"up":"down");
+ if(nav_action) ESP_LOGI(TAG,"NAV_BUTTON action=%s repeat=%d",nav_action==R1_NAV_UP?"up":"down",nav_action==R1_NAV_UP && nav_was_held);
  if(nav_action==R1_NAV_DOWN) board_button_enqueue('j');
- if(nav_action==R1_NAV_UP) board_button_enqueue('u');
+ if(nav_action==R1_NAV_UP) board_button_enqueue(nav_was_held?'U':'u');
 #endif
 #if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
  if(!ready) {button_count=0;button_head=0;}
+#if R1_NAV_BUTTON_GPIO >= 0
+ /* A repeat waiting behind another gesture must not outlive button release. */
+ if(!nav_button.raw) board_button_cancel_repeats();
+#endif
  uint32_t button_tick=(uint32_t)((esp_timer_get_time()*1024)/1000000);
- if(button_count && (button_pending[button_head]=='r' || !last_touch_tick || button_tick-last_touch_tick>=R1_BUTTON_INTERVAL_TICKS)) {
-  gesture(button_pending[button_head]);button_head=(button_head+1)%sizeof(button_pending);button_count--;
+ bool repeat_ready=true;
+#if R1_NAV_BUTTON_GPIO >= 0
+ if(button_count && button_pending[button_head]=='U')
+  repeat_ready=(uint32_t)current-nav_last_up_ms>=R1_NAV_BUTTON_REPEAT_MS;
+#endif
+ if(button_count && repeat_ready && (button_pending[button_head]=='r' || !last_touch_tick || button_tick-last_touch_tick>=R1_BUTTON_INTERVAL_TICKS)) {
+  char command=button_pending[button_head];gesture(command);
+#if R1_NAV_BUTTON_GPIO >= 0
+  if(command=='u' || command=='U') nav_last_up_ms=(uint32_t)current;
+#endif
+  button_head=(button_head+1)%sizeof(button_pending);button_count--;
  }
 #else
  (void)current;

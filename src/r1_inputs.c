@@ -53,9 +53,14 @@ unsigned r1_button_update(struct r1_button *s,bool down,uint32_t now,
  return events;
 }
 unsigned r1_nav_button_update(struct r1_button *s,bool down,uint32_t now,
-                             uint32_t debounce_ms,uint32_t hold_ms) {
+                             uint32_t debounce_ms,uint32_t hold_ms,uint32_t repeat_ms) {
  unsigned events=r1_button_update(s,down,now,debounce_ms,hold_ms,0,hold_ms);
- if(events&R1_INPUT_HOLD) return R1_NAV_UP;
+ if(events&R1_INPUT_HOLD) {s->nav_repeat_ms=now;return R1_NAV_UP;}
  if(events&R1_INPUT_CLICK) return R1_NAV_DOWN;
+ if(repeat_ms && s->armed && s->held && s->stable && s->raw &&
+    (uint32_t)(now-s->changed_ms)>=debounce_ms &&
+    (uint32_t)(now-s->nav_repeat_ms)>=repeat_ms) {
+  s->nav_repeat_ms=now;return R1_NAV_UP;
+ }
  return R1_NAV_NONE;
 }

@@ -3,6 +3,7 @@
 #define R1_BUTTON_GPIO 1 /* blue KEYB: tap gestures, active-low */
 #define R1_NAV_BUTTON_GPIO 2 /* yellow KEYA: short=down, hold=up, active-low */
 #define R1_NAV_BUTTON_HOLD_MS 700
+#define R1_NAV_BUTTON_REPEAT_MS 500 /* up repeat after first hold; 0 disables */
 #define R1_BUTTON_DEBOUNCE_MS 30
 #define R1_BUTTON_HOLD_MS 700
 #define R1_BUTTON_DOUBLE_MS 300 /* first release to second press; single tap waits */
@@ -28,5 +29,5 @@
  * Set 1 to reject a glasses role on an exact peer-address mismatch. */
 #define R1_STRICT_TARGET_MATCH 0
 /* Old stock has one live phone role and one live glasses role (3 link slots). */
-#define R1_PROBE_VERSION "0.2.6"
+#define R1_PROBE_VERSION "0.2.7"
 #define R1_TX_TIMEOUT_MS 5000

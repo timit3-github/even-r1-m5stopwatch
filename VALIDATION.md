@@ -1,4 +1,31 @@
-# Validation — v0.2.6, 2026-10-09 UTC / 2026-10-10 JST
+# Validation — v0.2.7, 2026-10-09 UTC / 2026-10-10 JST
+
+## Current baseline and repeat change
+
+User confirms StopWatch v0.2.6 connects to stock G2 and all operations work,
+including dedicated type9 short-then-long menu. Restart/reconnection is still
+unverified. M5Dial's earlier v0.2.5 connection failure root cause remains unknown.
+
+Added configurable navigation-up repeat: first at the existing 700ms hold,
+then every R1_NAV_BUTTON_REPEAT_MS (default500ms, zero disables). Raw release
+stops repetition and cancels queued repeats; held release never emits down.
+At most one repeat can wait in the host pacing queue. Late input polls create
+one up and reset the repeat timestamp, never catch up missed repeats.
+An additional host dispatch gate spaces repeated ups from the preceding
+navigation up's actual dispatch time, avoiding shortened intervals after delay.
+Loss of an eligible G2 link resets button state and queue. On restoration,
+a button still held remains suppressed until released and pressed again.
+Advertised version and BLE connection/GATT/role logic unchanged from v0.2.6.
+
+Wire/legacy/input C11 -Wall -Wextra -Werror suites pass. Added tests cover first
+hold and 500ms repeats at exact boundaries, no same-tick duplicate, 1000ms
+configuration, disabled-repeat baseline, raw release and release bounce,
+long late-poll gap without catch-up, new press with a fresh hold delay,
+connection-state reset while held, and uint32 clock wrap. Existing tap and
+navigation regressions also pass. No ESP-IDF cross-build or hardware repeat
+trial performed here; source-only deliverable.
+
+Historical v0.2.6 validation follows; use the current status above.
 
 ## Current status: StopWatch + version rollback
 

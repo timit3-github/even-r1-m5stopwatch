@@ -1,6 +1,7 @@
-# v0.2.6: M5Stack StopWatch
+# v0.2.7: M5Stack StopWatch
 
-既定の物理入力をM5DialからStopWatchへ変更しました。
+v0.2.6でStopWatchとG2の接続・全操作（short→long含む）の成功が報告されています。
+再起動後の自動再接続は未確認です。v0.2.7ではG2ボタン保持中のup繰り返しを追加しました。
 公式ピンマップは青KEYB=G1、黄KEYA=G2です。ユーザー指定のGPIOを優先して割り当てます。
 
 | 入力 | 操作 | 通知 / コンソール相当 |
@@ -10,17 +11,30 @@
 | G1 青: 単独長押し | long tap | type 0 / h、解放でtype 8 / r |
 | G1 青: 短押し→長押し | tap-then-long | type 9 / m、解放でtype 8 / r |
 | G2 黄: 短押し | down | type 5、v0=1、v1=1 / j |
-| G2 黄: 700ms長押し | upを1回 | type 4、v0=1、v1=1 / u |
+| G2 黄: 700ms長押し | 最初のup、その後500msごとにup | type 4、v0=1、v1=1 / u |
 
 G1はv0.2.5の判定を継続します。単押しは二度押し判定のため解放後約300ms待ちます。
 短押しの解放後300ms以内に再び押し200ms保持すると専用type 9です。
-このメニュー通知のG2 2.3.2.14での成功はまだ未確認です。
+この専用type 9によるメニュー操作は、StopWatch実機で成功が報告されています。
 
 G2は30msのチャタリング除去後、押下確定から700msを測ります。
-短押しのdownは解放確定時に送ります。長押しは700msに達した時点でupを1回送り、
-長押し開始時・解放時にdownを送りません。保持中の繰り返し送信もありません。
+短押しのdownは解放確定時に送ります。長押しは700msに達した時点で最初のupを送り、
+以後、保持中は500msごとにupを送ります。長押し開始時・解放時にdownを送りません。
+解放を検出すると繰り返しを止め、送信待ちの繰り返しupも取り消します。
+G2の操作用リンクがなくなると保留操作とボタン状態をリセットします。
+そのまま保持したまま接続が戻っても、いったん離して押し直すまで再開しません。
+処理が遅れた場合は1回だけupを発生させ、遅れた回数をまとめて送りません。
 G2には二度押し判定を入れず、短く2回押すとdownを2回送ります。
 閾値はinclude/r1_config.hのR1_NAV_BUTTON_HOLD_MSで変更できます。
+繰り返し間隔は同じファイルで次を変更します（単位ms）。
+
+```c
+#define R1_NAV_BUTTON_REPEAT_MS 500
+```
+
+1000なら1秒ごと、250なら250msごと。0なら繰り返さずupを1回だけ送ります。
+判定は20ms周期のポーリングで行い、通知には既存の125ms以上の最小間隔があるため、
+設定値より短い周期で送信はしません。G1の操作やBLE処理で通知が遅れる場合があります。
 UIによってスワイプの見え方は異なり、down/upの通知形式は従来のj/uと同じです。
 
 ## GPIOと周辺機器
@@ -40,13 +54,13 @@ StopWatchではG46がAMOLEDのデータ線なので、M5Dialの電源保持設�
 従来の保守的な4MB / DIO / 40MHzのままです。公式StopWatchの物理Flashは16MBですが、
 今回のアプリは全容量を使う必要がありません。
 
-v0.2.5のプロジェクトから次を更新します。
+v0.2.6のプロジェクトから次を更新します。
 
 - CMakeLists.txt
 - src/main.c
 - src/r1_inputs.c
 - include/r1_inputs.h
-- include/r1_config.h（今回のボード変更を反映）
+- include/r1_config.h（R1_NAV_BUTTON_REPEAT_MS追加、PROBE_VERSIONを0.2.7へ）
 
 SDKやGATT設定は維持します。StopWatchへの初回書き込みは、新しいプロジェクトの
 bootloaderとpartition tableも合わせるためapp-flashではなくflashを使用します。
@@ -69,7 +83,7 @@ status / autoは操作開始の必須コマンドではありません。
 ## 初回の確認
 
 ```text
-PROBE_VERSION=0.2.6
+PROBE_VERSION=0.2.7
 BOARD_INPUTS button=1 nav_button=2 encoder_a=-1 encoder_b=-1 ...
 IDENTITY ... app=2.2.6.0009 ...
 ```
@@ -90,16 +104,22 @@ TOUCH type=5 v0=1 v1=1 queued=1 ...
 TX_CH1 ... len=11
 ```
 
-G2長押しの期待ログ:
+G2長押しの期待ログ（最初はrepeat=0、繰り返しはrepeat=1）:
 
 ```text
-NAV_BUTTON action=up
+NAV_BUTTON action=up repeat=0
+TOUCH type=4 v0=1 v1=1 queued=1 ...
+TX_CH1 ... len=11
+... 約500ms後 ...
+NAV_BUTTON action=up repeat=1
 TOUCH type=4 v0=1 v1=1 queued=1 ...
 TX_CH1 ... len=11
 ```
 
-実機未確認です。既存プロトコル、短押しdown・長押しupのみ・解放で追加通知なし・
-700ms境界・短押しの連続・2ボタンの状態独立についてホストテストを実施しています。
+v0.2.6の全操作は実機確認済みです。今回の繰り返し機能はまだ実機未確認です。
+ホストテストで500ms反復、間隔変更・無効化、解放と接点揺れで停止、
+処理遅延時の一括再生なし、接続喪失時の状態リセット、時刻の桁あふれを検証しました。
+こちらではESP向けビルドを実施していません。
 
 ## 表示バージョンと接続調査
 
