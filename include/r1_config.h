@@ -20,7 +20,7 @@
 #define R1_POWER_HOLD_GPIO -1 /* M5Dial GPIO46 must not be driven on StopWatch */
 #define R1_DISPLAY_BACKLIGHT_GPIO -1 /* StopWatch uses AMOLED, no GPIO9 backlight */
 /* User-tested version; reconnect after reboot may take several minutes. */
-#define R1_APP_VERSION "2.3.2.0007"
+#define R1_APP_VERSION "2.9.9.9999"
 #define R1_HW_VERSION "603MV1.9.3"
 /* Emulated identity; not a copied retail serial. Exactly 15 ASCII characters. */
 #define R1_SERIAL "ESP32S3R1TST001"
@@ -38,10 +38,22 @@
 #define R1_TOUCH_SWIPE_PX 60 /* one up/down per contact */
 #define R1_TOUCH_TAP_SLOP_PX 20 /* movement beyond this cancels tap/hold */
 #define R1_TOUCH_SWIPE_REVERSE 0 /* 0: finger upward=up, downward=down */
+/* Automatic power management; BLE stays enabled. */
+#define R1_IDLE_TIMEOUT_MS 60000 /* 0 disables button-only user standby */
+#define R1_IDLE_HOST_POLL_MS 1000
+#define R1_IDLE_BATTERY_POLL_MS 30000
+#define R1_PM_MAX_CPU_MHZ 160
+#define R1_PM_MIN_CPU_MHZ 40
+/* StopWatch USB supply detection and Light-sleep inhibition. */
+#define R1_USB_VIN_POLL_MS 1000 /* Also poll during standby for USB reconnection. */
+#define R1_USB_VIN_ON_MV 4000
+#define R1_USB_VIN_OFF_MV 3000
+#define R1_USB_VIN_MAX_MV 6500 /* Reject implausible readings, retaining lock. */
+#define R1_USB_VIN_RELEASE_MS 2000 /* Repeated low readings before release. */
 #define R1_REASSEMBLY_TIMEOUT_MS 5000
 /* Logging-only target checks until command/peer byte order is observed.
  * Set 1 to reject a glasses role on an exact peer-address mismatch. */
 #define R1_STRICT_TARGET_MATCH 0
 /* Old stock has one live phone role and one live glasses role (3 link slots). */
-#define R1_PROBE_VERSION "0.3.0"
+#define R1_FIRMWARE_VERSION "0.3.1"
 #define R1_TX_TIMEOUT_MS 5000

@@ -3,7 +3,7 @@
 #pragma once
 #include "r1_inputs.h"
 #include <stddef.h>
-struct r1_touch_sample {bool valid,down,position;uint16_t x,y;int64_t ms;};
+struct r1_touch_sample {bool valid,down,position;uint16_t x,y;int64_t ms;uint32_t epoch;};
 bool r1_touch_decode(const uint8_t *bytes,size_t n,struct r1_touch_sample *sample);
 struct r1_touch_gesture {
  struct r1_button button;
@@ -16,6 +16,8 @@ unsigned r1_touch_gesture_update(struct r1_touch_gesture *s,bool down,int x,int 
  uint32_t now,uint32_t hold_ms,uint32_t double_ms,uint32_t followup_ms,
  unsigned slop,unsigned swipe);
 void r1_touch_hw_init(void);
+/* Pause reads, not power. Epochs discard in-flight reads across pause/resume. */
+void r1_touch_hw_set_active(bool active);
 bool r1_touch_hw_pop(struct r1_touch_sample *sample);
 struct r1_touch_sample r1_touch_hw_get(void);
 bool r1_touch_hw_overflow(void);

@@ -12,6 +12,9 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "driver/usb_serial_jtag.h"
+#include "esp_pm.h"
+#include "esp_sleep.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
@@ -30,12 +33,20 @@ void ble_store_config_init(void);
 #include "r1_legacy.h"
 #include "r1_inputs.h"
 #include "r1_battery.h"
+#include "r1_usb_power.h"
 #include "r1_i2c.h"
 #include "r1_touch.h"
+#include "r1_idle.h"
+#include "r1_power.h"
+#if !CONFIG_PM_ENABLE || !CONFIG_FREERTOS_USE_TICKLESS_IDLE || !CONFIG_BT_CTRL_MODEM_SLEEP || !CONFIG_BT_CTRL_MAIN_XTAL_PU_DURING_LIGHT_SLEEP || !CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL || !CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION
+#error "Power management needs a fresh sdkconfig using sdkconfig.defaults; see docs/BUILD.md"
+#endif
 #if CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY || CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO
 #error "R1 v0.2.2 needs all four GAP PPCP settings zero. Run: python tools/configure_gatt_layout.py sdkconfig"
 #endif
 static const char *TAG="R1TEST";
+_Static_assert(R1_IDLE_HOST_POLL_MS>=20,"standby host period must be >=20ms");
+_Static_assert(R1_IDLE_TIMEOUT_MS<INT32_MAX,"idle timeout must be below half of the 32-bit clock range");
 #define UUID(n) BLE_UUID128_INIT(0x1f,0x9d,0x32,0xf7,0xf1,0x3a,0x65,0x8e,0x03,0x45,0x05,0x4f,n,0x00,0xe8,0xba)
 static const ble_uuid128_t service_uuid=UUID(1), rx1_uuid=UUID(0x10), tx1_uuid=UUID(0x11),rx2_uuid=UUID(0x12),tx2_uuid=UUID(0x13);
 static uint16_t rx1_handle,tx1_handle,rx2_handle,tx2_handle;
@@ -51,6 +62,51 @@ static bool source_enabled=true;
 static uint32_t last_touch_tick;
 static int selected_conn=-1;
 static int64_t now_ms(void);
+static struct r1_idle user_idle;
+static bool waiting_snapshot;
+static struct ble_npl_event host_work;
+static bool host_work_ready;
+struct button_edge { int pin; bool down; uint32_t ms; };
+static QueueHandle_t button_edges;
+static TaskHandle_t button_wake_task;
+static unsigned button_edge_overflow;
+static uint32_t disconnect_count;
+static uint32_t glasses_disconnect_count,host_reset_count;
+static uint32_t button_sample_ms;
+static esp_pm_lock_handle_t button_awake_lock;
+static bool button_awake_locked;
+static void tick(struct ble_npl_event *ev);
+bool r1_power_waiting(void) {return __atomic_load_n(&waiting_snapshot,__ATOMIC_ACQUIRE);}
+static void request_host_work(void) {
+ if(__atomic_load_n(&host_work_ready,__ATOMIC_ACQUIRE))
+  ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&host_work);
+}
+static void button_wake_relay(void *arg) {
+ (void)arg;
+ for(;;) {ulTaskNotifyTake(pdTRUE,portMAX_DELAY);request_host_work();}
+}
+static void button_isr(void *arg) {
+ int pin=(int)(uintptr_t)arg;
+ /* Level wake and digital IRQ share a trigger register. Mask before posting
+    to avoid an interrupt storm; the host rearms for the opposite level. */
+ gpio_intr_disable(pin);
+ struct button_edge edge={.pin=pin,.down=!gpio_get_level(pin),.ms=(uint32_t)(esp_timer_get_time()/1000)};
+ BaseType_t woken=pdFALSE;
+ if(xQueueSendFromISR(button_edges,&edge,&woken)!=pdTRUE)
+  __atomic_store_n(&button_edge_overflow,1,__ATOMIC_RELAXED);
+ vTaskNotifyGiveFromISR(button_wake_task,&woken);
+ if(woken) portYIELD_FROM_ISR();
+}
+static void enable_button_wakeup(int pin) {
+ ESP_ERROR_CHECK(gpio_isr_handler_add(pin,button_isr,(void *)(uintptr_t)pin));
+ ESP_ERROR_CHECK(gpio_set_intr_type(pin,GPIO_INTR_LOW_LEVEL));
+ ESP_ERROR_CHECK(gpio_wakeup_enable(pin,GPIO_INTR_LOW_LEVEL));
+ ESP_ERROR_CHECK(gpio_intr_enable(pin));
+}
+static void rearm_button(int pin,bool down) {
+ ESP_ERROR_CHECK(gpio_set_intr_type(pin,down?GPIO_INTR_HIGH_LEVEL:GPIO_INTR_LOW_LEVEL));
+ ESP_ERROR_CHECK(gpio_intr_enable(pin));
+}
 #if R1_BUTTON_GPIO >= 0
 static struct r1_button board_button;
 #endif
@@ -89,15 +145,21 @@ static void board_output(int pin,int level) {
 static void board_inputs_init(void) {
  board_output(R1_POWER_HOLD_GPIO,1);
  board_output(R1_DISPLAY_BACKLIGHT_GPIO,0);
+ button_edges=xQueueCreate(32,sizeof(struct button_edge));assert(button_edges);
+ assert(xTaskCreate(button_wake_relay,"r1_button_wake",2048,NULL,2,&button_wake_task)==pdPASS);
+ int isr_rc=gpio_install_isr_service(0);
+ if(isr_rc!=ESP_ERR_INVALID_STATE) ESP_ERROR_CHECK(isr_rc);
 #if R1_BUTTON_GPIO >= 0
  gpio_config_t button={.pin_bit_mask=1ULL<<R1_BUTTON_GPIO,.mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE};
  ESP_ERROR_CHECK(gpio_config(&button));
  r1_button_init(&board_button,!gpio_get_level(R1_BUTTON_GPIO),(uint32_t)now_ms());
+ enable_button_wakeup(R1_BUTTON_GPIO);
 #endif
 #if R1_NAV_BUTTON_GPIO >= 0
  gpio_config_t nav={.pin_bit_mask=1ULL<<R1_NAV_BUTTON_GPIO,.mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE};
  ESP_ERROR_CHECK(gpio_config(&nav));
  r1_button_init(&nav_button,!gpio_get_level(R1_NAV_BUTTON_GPIO),(uint32_t)now_ms());
+ enable_button_wakeup(R1_NAV_BUTTON_GPIO);
 #endif
 #if R1_ENCODER_A_GPIO >= 0 && R1_ENCODER_B_GPIO >= 0
  _Static_assert(R1_ENCODER_EDGES_PER_STEP>0 && R1_ENCODER_EDGES_PER_STEP<=4,"Encoder edges must be 1..4");
@@ -115,6 +177,7 @@ static void board_inputs_init(void) {
  ESP_ERROR_CHECK(gpio_intr_enable(R1_ENCODER_B_GPIO));
 #endif
  ESP_LOGI(TAG,"BOARD_INPUTS button=%d nav_button=%d encoder_a=%d encoder_b=%d edges=%d reverse=%d",R1_BUTTON_GPIO,R1_NAV_BUTTON_GPIO,R1_ENCODER_A_GPIO,R1_ENCODER_B_GPIO,R1_ENCODER_EDGES_PER_STEP,R1_ENCODER_REVERSE);
+ ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
 }
 struct console_command { char text[540]; };
 struct link {
@@ -145,8 +208,10 @@ static bool assign_role(struct link *l,bool phone) {
    (phone?links[i].phone:links[i].glasses)) {
   ESP_LOGW(TAG,"ROLE_OCCUPIED conn=%u owner=%u role=%s",l->handle,links[i].handle,phone?"phone":"glasses");return false;
  }
+ bool changed=phone?!l->phone:!l->glasses;
  if(phone) l->phone=true;else l->glasses=true;
- ESP_LOGI(TAG,"ROLE conn=%u role=%s",l->handle,phone?"phone":"glasses");return true;
+ if(changed) ESP_LOGI(TAG,"ROLE conn=%u role=%s",l->handle,phone?"phone":"glasses");
+ return true;
 }
 static void log_bytes(const char *label,uint16_t conn,const uint8_t *p,size_t n) {
  ESP_LOGI(TAG,"%s conn=%u len=%u",label,conn,(unsigned)n);
@@ -157,7 +222,7 @@ static bool queue_packet(struct link *l,uint16_t attr,const uint8_t *p,size_t n)
  if(!n || n>244 || tx_count==32) { ESP_LOGW(TAG,"TX_QUEUE_FULL_OR_OVERSIZE"); return false; }
  struct tx_packet *t=&tx_queue[(tx_head+tx_count)%32];
  *t=(struct tx_packet){.conn=l->handle,.attr=attr,.generation=l->generation,.len=n,.queued_ms=now_ms()};
- memcpy(t->bytes,p,n);tx_count++;return true;
+ memcpy(t->bytes,p,n);tx_count++;request_host_work();return true;
 }
 static void reply(struct link *l,const struct r1_model *req,uint8_t status,const uint8_t *p,size_t n) {
  if(!l->notify2) { ESP_LOGW(TAG,"NO_EUS_SUBSCRIPTION conn=%u",l->handle);return; }
@@ -264,7 +329,8 @@ static void legacy_dispatch(struct link *l,const uint8_t *p,size_t n) {
  if(plan.action==R1_LEGACY_UNSUPPORTED) {ESP_LOGW(TAG,"LEGACY_UNIMPLEMENTED opcode=%02x",p[2]);return;}
  if(l->phone) {ESP_LOGW(TAG,"LEGACY_ON_PHONE conn=%u",l->handle);return;}
  int match=r1_target_match(targets,l->peer);
- ESP_LOGI(TAG,"LEGACY conn=%u opcode=%02x target=%d",l->handle,p[2],match);
+ if(!r1_power_waiting() || plan.action!=R1_LEGACY_HEARTBEAT)
+  ESP_LOGI(TAG,"LEGACY conn=%u opcode=%02x target=%d",l->handle,p[2],match);
 #if R1_STRICT_TARGET_MATCH
  if(match==-2) {ESP_LOGW(TAG,"TARGET_REJECTED conn=%u",l->handle);return;}
 #endif
@@ -285,12 +351,13 @@ static void legacy_dispatch(struct link *l,const uint8_t *p,size_t n) {
 }
 static int gatt_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ctx,void *arg) {
  (void)attr;
+ request_host_work();
  unsigned channel=(uintptr_t)arg;
  if(ctx->op!=BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_READ_NOT_PERMITTED;
  struct link *l=find_link(conn);if(!l) return BLE_ATT_ERR_UNLIKELY;
  uint8_t data[244];uint16_t len;
  if(OS_MBUF_PKTLEN(ctx->om)>sizeof(data) || ble_hs_mbuf_to_flat(ctx->om,data,sizeof(data),&len)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
- log_bytes(channel==1?"RX_CH1":"RX_CH2",conn,data,len);
+ if(!r1_power_waiting()) log_bytes(channel==1?"RX_CH1":"RX_CH2",conn,data,len);
  if(channel==1) {
   legacy_dispatch(l,data,len);
   return 0;
@@ -359,6 +426,7 @@ static void advertise(void) {
 }
 static int gap_event(struct ble_gap_event *event,void *arg) {
  (void)arg;
+ request_host_work();
  switch(event->type) {
  case BLE_GAP_EVENT_CONNECT:
   if(!event->connect.status) {
@@ -380,8 +448,13 @@ static int gap_event(struct ble_gap_event *event,void *arg) {
   } else ESP_LOGW(TAG,"CONNECT_FAILED status=%d",event->connect.status);
   advertise();return 0;
  case BLE_GAP_EVENT_DISCONNECT: {
+  disconnect_count++;
   uint16_t h=event->disconnect.conn.conn_handle;ESP_LOGI(TAG,"DISCONNECTED conn=%u reason=%d",h,event->disconnect.reason);
-  struct link *l=find_link(h);if(l) memset(l,0,sizeof(*l));if(selected_conn==h) selected_conn=-1;advertise();return 0;
+  struct link *l=find_link(h);
+  if(l && l->glasses) glasses_disconnect_count++;
+  if(l) memset(l,0,sizeof(*l));
+  if(selected_conn==h) selected_conn=-1;
+  advertise();return 0;
  }
  case BLE_GAP_EVENT_SUBSCRIBE: {
   struct link *l=find_link(event->subscribe.conn_handle);
@@ -420,7 +493,12 @@ static int gap_event(struct ble_gap_event *event,void *arg) {
   return BLE_GAP_REPEAT_PAIRING_RETRY;
  }
  case BLE_GAP_EVENT_MTU: ESP_LOGI(TAG,"MTU conn=%u value=%u",event->mtu.conn_handle,event->mtu.value);return 0;
- case BLE_GAP_EVENT_CONN_UPDATE: ESP_LOGI(TAG,"CONN_UPDATE conn=%u status=%d",event->conn_update.conn_handle,event->conn_update.status);return 0;
+ case BLE_GAP_EVENT_CONN_UPDATE: {
+  struct ble_gap_conn_desc d;
+  if(!ble_gap_conn_find(event->conn_update.conn_handle,&d))
+   ESP_LOGI(TAG,"CONN_UPDATE conn=%u status=%d interval=%u latency=%u timeout=%u",d.conn_handle,event->conn_update.status,d.conn_itvl,d.conn_latency,d.supervision_timeout);
+  return 0;
+ }
  case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE: ESP_LOGI(TAG,"PHY conn=%u status=%d tx=%u rx=%u",event->phy_updated.conn_handle,event->phy_updated.status,event->phy_updated.tx_phy,event->phy_updated.rx_phy);return 0;
  case BLE_GAP_EVENT_ADV_COMPLETE: advertise();return 0;
  default:return 0;
@@ -470,12 +548,72 @@ static void board_button_cancel_repeats(void) {
 }
 #endif
 #endif
+static void board_buttons_update(bool ready,bool button_down,bool nav_down,uint32_t current) {
+ (void)ready;(void)button_down;(void)nav_down;(void)current;
+ /* An IRQ can arrive between the edge drain and a live GPIO sample. Never
+    replay its older timestamp backwards into unsigned debounce arithmetic. */
+ if((int32_t)(current-button_sample_ms)<0) current=button_sample_ms;
+ button_sample_ms=current;
+#if R1_BUTTON_GPIO >= 0
+ if(button_down!=board_button.raw) ESP_LOGI(TAG,"BUTTON_RAW down=%d ready=%d",button_down,ready);
+ if(!ready) r1_button_init(&board_button,button_down,(uint32_t)current);
+ bool button_was_stable=board_button.stable;
+ unsigned events=r1_button_update(&board_button,button_down,(uint32_t)current,
+   R1_BUTTON_DEBOUNCE_MS,R1_BUTTON_HOLD_MS,R1_BUTTON_DOUBLE_MS,R1_BUTTON_FOLLOWUP_HOLD_MS);
+ if(board_button.stable!=button_was_stable)
+  ESP_LOGI(TAG,"BUTTON_EDGE down=%d ready=%d followup=%d held=%d hold_ms=%"PRIu32" elapsed_ms=%"PRIu32,
+    board_button.stable,ready,board_button.followup,board_button.held,board_button.active_hold_ms,
+    (uint32_t)current-board_button.pressed_ms);
+ if(events) ESP_LOGI(TAG,"BUTTON events=%u",events);
+ if(events&R1_INPUT_CLICK) board_button_enqueue('s');
+ if(events&R1_INPUT_DOUBLE) board_button_enqueue('d');
+ if(events&R1_INPUT_TAP_HOLD) board_button_enqueue('m');
+ if(events&R1_INPUT_HOLD) board_button_enqueue('h');
+ if(events&R1_INPUT_RELEASE) board_button_enqueue('r');
+#endif
+#if R1_NAV_BUTTON_GPIO >= 0
+ if(nav_down!=nav_button.raw) ESP_LOGI(TAG,"NAV_BUTTON_RAW down=%d ready=%d",nav_down,ready);
+ if(!ready) r1_button_init(&nav_button,nav_down,(uint32_t)current);
+ bool nav_was_stable=nav_button.stable;
+ bool nav_was_held=nav_button.held;
+ unsigned nav_action=r1_nav_button_update(&nav_button,nav_down,(uint32_t)current,
+   R1_BUTTON_DEBOUNCE_MS,R1_NAV_BUTTON_HOLD_MS,R1_NAV_BUTTON_REPEAT_MS);
+ if(nav_button.stable!=nav_was_stable)
+  ESP_LOGI(TAG,"NAV_BUTTON_EDGE down=%d ready=%d held=%d",nav_button.stable,ready,nav_button.held);
+ if(nav_action) ESP_LOGI(TAG,"NAV_BUTTON action=%s repeat=%d",nav_action==R1_NAV_UP?"up":"down",nav_action==R1_NAV_UP && nav_was_held);
+ if(nav_action==R1_NAV_DOWN) board_button_enqueue('j');
+ if(nav_action==R1_NAV_UP) board_button_enqueue(nav_was_held?'U':'u');
+#endif
+}
+static void idle_transition(bool before) {
+ if(before==user_idle.waiting) return;
+ __atomic_store_n(&waiting_snapshot,user_idle.waiting,__ATOMIC_RELEASE);
+ r1_touch_hw_set_active(!user_idle.waiting);
+#if R1_TOUCH_ENABLED
+ r1_touch_gesture_init(&touch_gesture,true,(uint32_t)now_ms());
+#endif
+ ESP_LOGI(TAG,"POWER_USER state=%s entries=%lu resumes=%lu",user_idle.waiting?"waiting":"active",
+          (unsigned long)user_idle.entries,(unsigned long)user_idle.resumes);
+}
+static uint32_t idle_timeout(void) {
+#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0
+ return R1_IDLE_TIMEOUT_MS;
+#else
+ return 0;
+#endif
+}
+static void physical_button_activity(void) {
+ bool before=user_idle.waiting;
+ r1_idle_update(&user_idle,(uint32_t)now_ms(),idle_timeout(),true,false,true);
+ idle_transition(before);
+}
 static void board_inputs_poll(int64_t current) {
  bool ready=false;
  for(unsigned i=0;i<3;i++) if(links[i].used && links[i].glasses && links[i].notify1 && links[i].touch_enabled && source_enabled &&
    (selected_conn<0 || selected_conn==links[i].handle)) ready=true;
  (void)ready;
 #if R1_TOUCH_ENABLED
+ if(!user_idle.waiting) {
  if(r1_touch_hw_overflow()) {
   if(touch_gesture.button.held) board_button_enqueue('r');
   r1_touch_gesture_init(&touch_gesture,true,(uint32_t)current);
@@ -506,38 +644,50 @@ static void board_inputs_poll(int64_t current) {
   if(ready && touch_gesture.button.held) board_button_enqueue('r');
   r1_touch_gesture_init(&touch_gesture,true,(uint32_t)current);
  }
+ }
 #endif
+ /* Replay captured edges on the host, settling the prior level first.
+    Do not reinitialize armed buttons when leaving user standby. */
+ struct button_edge edge;
+ if(__atomic_exchange_n(&button_edge_overflow,0,__ATOMIC_RELAXED)) {
+  xQueueReset(button_edges);
 #if R1_BUTTON_GPIO >= 0
- bool button_down=!gpio_get_level(R1_BUTTON_GPIO);
- if(button_down!=board_button.raw) ESP_LOGI(TAG,"BUTTON_RAW down=%d ready=%d",button_down,ready);
- if(!ready) r1_button_init(&board_button,button_down,(uint32_t)current);
- bool button_was_stable=board_button.stable;
- unsigned events=r1_button_update(&board_button,button_down,(uint32_t)current,
-   R1_BUTTON_DEBOUNCE_MS,R1_BUTTON_HOLD_MS,R1_BUTTON_DOUBLE_MS,R1_BUTTON_FOLLOWUP_HOLD_MS);
- if(board_button.stable!=button_was_stable)
-  ESP_LOGI(TAG,"BUTTON_EDGE down=%d ready=%d followup=%d held=%d hold_ms=%"PRIu32" elapsed_ms=%"PRIu32,
-    board_button.stable,ready,board_button.followup,board_button.held,board_button.active_hold_ms,
-    (uint32_t)current-board_button.pressed_ms);
- if(events) ESP_LOGI(TAG,"BUTTON events=%u",events);
- if(events&R1_INPUT_CLICK) board_button_enqueue('s');
- if(events&R1_INPUT_DOUBLE) board_button_enqueue('d');
- if(events&R1_INPUT_TAP_HOLD) board_button_enqueue('m');
- if(events&R1_INPUT_HOLD) board_button_enqueue('h');
- if(events&R1_INPUT_RELEASE) board_button_enqueue('r');
+  r1_button_init(&board_button,!gpio_get_level(R1_BUTTON_GPIO),(uint32_t)current);
 #endif
 #if R1_NAV_BUTTON_GPIO >= 0
- bool nav_down=!gpio_get_level(R1_NAV_BUTTON_GPIO);
- if(nav_down!=nav_button.raw) ESP_LOGI(TAG,"NAV_BUTTON_RAW down=%d ready=%d",nav_down,ready);
- if(!ready) r1_button_init(&nav_button,nav_down,(uint32_t)current);
- bool nav_was_stable=nav_button.stable;
- bool nav_was_held=nav_button.held;
- unsigned nav_action=r1_nav_button_update(&nav_button,nav_down,(uint32_t)current,
-   R1_BUTTON_DEBOUNCE_MS,R1_NAV_BUTTON_HOLD_MS,R1_NAV_BUTTON_REPEAT_MS);
- if(nav_button.stable!=nav_was_stable)
-  ESP_LOGI(TAG,"NAV_BUTTON_EDGE down=%d ready=%d held=%d",nav_button.stable,ready,nav_button.held);
- if(nav_action) ESP_LOGI(TAG,"NAV_BUTTON action=%s repeat=%d",nav_action==R1_NAV_UP?"up":"down",nav_action==R1_NAV_UP && nav_was_held);
- if(nav_action==R1_NAV_DOWN) board_button_enqueue('j');
- if(nav_action==R1_NAV_UP) board_button_enqueue(nav_was_held?'U':'u');
+  r1_button_init(&nav_button,!gpio_get_level(R1_NAV_BUTTON_GPIO),(uint32_t)current);
+#endif
+  ESP_LOGW(TAG,"BUTTON_EDGE_OVERFLOW; release buttons before retrying");
+ }
+ while(xQueueReceive(button_edges,&edge,0)==pdTRUE) {
+  bool button_down=false,nav_down=false;
+#if R1_BUTTON_GPIO >= 0
+  button_down=board_button.raw;
+#endif
+#if R1_NAV_BUTTON_GPIO >= 0
+  nav_down=nav_button.raw;
+#endif
+  if(edge.down) physical_button_activity();
+  board_buttons_update(ready,button_down,nav_down,edge.ms);
+  if(edge.pin==R1_BUTTON_GPIO) button_down=edge.down;
+  if(edge.pin==R1_NAV_BUTTON_GPIO) nav_down=edge.down;
+  board_buttons_update(ready,button_down,nav_down,edge.ms);
+ }
+ bool button_down=false,nav_down=false;
+ current=now_ms();
+#if R1_BUTTON_GPIO >= 0
+ button_down=!gpio_get_level(R1_BUTTON_GPIO);
+#endif
+#if R1_NAV_BUTTON_GPIO >= 0
+ nav_down=!gpio_get_level(R1_NAV_BUTTON_GPIO);
+#endif
+ if(button_down || nav_down) physical_button_activity();
+ board_buttons_update(ready,button_down,nav_down,(uint32_t)current);
+#if R1_BUTTON_GPIO >= 0
+ rearm_button(R1_BUTTON_GPIO,button_down);
+#endif
+#if R1_NAV_BUTTON_GPIO >= 0
+ rearm_button(R1_NAV_BUTTON_GPIO,nav_down);
 #endif
 #if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
  if(!ready) {button_count=0;button_head=0;}
@@ -585,9 +735,18 @@ static void board_inputs_poll(int64_t current) {
 #endif
 }
 static void dump_status(void) {
- ESP_LOGI(TAG,"STATUS probe=%s adv=%d tx_pending=%u source=%d selected=%d",R1_PROBE_VERSION,ble_gap_adv_active(),tx_count,source_enabled,selected_conn);
+ ESP_LOGI(TAG,"POWER state=%s uptime_ms=%lld idle_age_ms=%lu entries=%lu resumes=%lu disconnects=%lu g2_disconnects=%lu host_resets=%lu",
+          user_idle.waiting?"waiting":"active",(long long)now_ms(),
+          (unsigned long)((uint32_t)now_ms()-user_idle.last_activity_ms),(unsigned long)user_idle.entries,
+          (unsigned long)user_idle.resumes,(unsigned long)disconnect_count,
+          (unsigned long)glasses_disconnect_count,(unsigned long)host_reset_count);
+ ESP_LOGI(TAG,"STATUS firmware=%s adv=%d tx_pending=%u source=%d selected=%d",R1_FIRMWARE_VERSION,ble_gap_adv_active(),tx_count,source_enabled,selected_conn);
  struct r1_battery b=r1_battery_get();
  ESP_LOGI(TAG,"BATTERY valid=%d percent=%u filtered_mv=%u age_ms=%lld",b.valid,b.percent,b.millivolts,(long long)(b.valid?now_ms()-b.sample_ms:-1));
+ struct r1_usb_power vin=r1_usb_power_get();
+ ESP_LOGI(TAG,"USB_VIN valid=%d mv=%u present=%d lock=%d release_pending=%d age_ms=%lld failures=%lu",
+          vin.valid,vin.millivolts,vin.present,vin.lock_held,vin.release_pending,
+          (long long)(vin.sample_ms?now_ms()-vin.sample_ms:-1),(unsigned long)vin.failures);
  struct r1_touch_sample tp=r1_touch_hw_get();
  ESP_LOGI(TAG,"TOUCH_PANEL enabled=%d valid=%d down=%d x=%u y=%u age_ms=%lld",R1_TOUCH_ENABLED,tp.valid,tp.down,tp.x,tp.y,(long long)(tp.ms?now_ms()-tp.ms:-1));
  log_bytes("TARGETS_LE_RAW",0,targets,sizeof(targets));
@@ -602,6 +761,7 @@ static void console_dispatch(const char *text) {
  if(strlen(text)==1 && strchr("sdhmujr",text[0])) {gesture(text[0]);return;}
  if(!strcmp(text,"menu")) {gesture('m');return;}
  if(!strcmp(text,"status")) {dump_status();return;}
+ if(!strcmp(text,"pm")) {dump_status();esp_pm_dump_locks(stdout);return;}
  if(!strcmp(text,"auto")) {selected_conn=-1;ESP_LOGI(TAG,"SELECT auto");return;}
  if(sscanf(text,"select %u %c",&type,&trailing)==1 && type<=UINT16_MAX) {
   struct link *l=find_link((uint16_t)type);
@@ -631,7 +791,7 @@ static void console_dispatch(const char *text) {
   queue_packet(l,channel==1?tx1_handle:tx2_handle,bytes,n);return;
  }
  if(!strcmp(text,"help") || !strcmp(text,"?")) {
-  ESP_LOGI(TAG,"Commands: status | s d h m u j r | menu (type9) | event TYPE V0 V1 | select CONN | auto | send CONN CHANNEL HEX");return;
+  ESP_LOGI(TAG,"Commands: status | pm (power locks) | s d h m u j r | menu (type9) | event TYPE V0 V1 | select CONN | auto | send CONN CHANNEL HEX");return;
  }
 invalid:
  ESP_LOGW(TAG,"INVALID_COMMAND (help for syntax)");
@@ -664,6 +824,7 @@ static void tick(struct ble_npl_event *ev) {
   }
  }
  board_inputs_poll(current);
+ current=now_ms();
  if(tx_count) {
   struct tx_packet *t=&tx_queue[tx_head];struct link *l=find_link(t->conn);bool remove=false;
   if(!l || l->generation!=t->generation || (t->attr==tx1_handle?!l->notify1:!l->notify2)) remove=true;
@@ -672,12 +833,46 @@ static void tick(struct ble_npl_event *ev) {
   else {
    struct os_mbuf *om=ble_hs_mbuf_from_flat(t->bytes,t->len);
    int rc=om?ble_gatts_notify_custom(t->conn,t->attr,om):BLE_HS_ENOMEM;
-   if(!rc) {log_bytes(t->attr==tx1_handle?"TX_CH1":"TX_CH2",t->conn,t->bytes,t->len);remove=true;}
+   if(!rc) {if(!r1_power_waiting()) log_bytes(t->attr==tx1_handle?"TX_CH1":"TX_CH2",t->conn,t->bytes,t->len);remove=true;}
    else if(++t->retries>=10) {ESP_LOGW(TAG,"TX_FAILED conn=%u rc=%d",t->conn,rc);remove=true;}
   }
   if(remove) {tx_head=(tx_head+1)%32;tx_count--;}
  }
- ble_npl_callout_reset(&ticker,ble_npl_time_ms_to_ticks32(20));
+ bool busy=tx_count || uxQueueMessagesWaiting(input_queue) || uxQueueMessagesWaiting(button_edges);
+ bool touch_down=false,button_down=false;
+#if R1_BUTTON_GPIO >= 0
+ button_down|=board_button.raw || board_button.stable;
+ busy|=board_button.pending_click;
+#endif
+#if R1_NAV_BUTTON_GPIO >= 0
+ button_down|=nav_button.raw || nav_button.stable;
+#endif
+#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
+ busy|=button_count!=0;
+#endif
+#if R1_ENCODER_A_GPIO >= 0 && R1_ENCODER_B_GPIO >= 0
+ busy|=pending_encoder || uxQueueMessagesWaiting(encoder_queue);
+#endif
+#if R1_TOUCH_ENABLED
+ struct r1_touch_sample tp=r1_touch_hw_get();
+ touch_down=tp.valid && tp.down;
+ busy|=tp.valid && (touch_gesture.button.pending_click || touch_gesture.contact);
+#endif
+ bool before=user_idle.waiting;
+ /* While down, use a high-level IRQ for release, keeping auto sleep off.
+    Once released/debounced, both buttons return to low-level wake. */
+ if(button_down!=button_awake_locked) {
+  if(button_down) ESP_ERROR_CHECK(esp_pm_lock_acquire(button_awake_lock));
+  else ESP_ERROR_CHECK(esp_pm_lock_release(button_awake_lock));
+  button_awake_locked=button_down;
+ }
+ r1_idle_update(&user_idle,(uint32_t)current,idle_timeout(),button_down,touch_down,busy);
+ idle_transition(before);
+ uint32_t period=user_idle.waiting?R1_IDLE_HOST_POLL_MS:20;
+ if(tx_count || uxQueueMessagesWaiting(input_queue)) period=20;
+ for(unsigned i=0;i<3;i++) if(links[i].used &&
+     (links[i].rx.active || links[i].phone_auth_pending || links[i].initial_state_pending)) period=20;
+ ble_npl_callout_reset(&ticker,ble_npl_time_ms_to_ticks32(period));
 }
 static void on_sync(void) {
  uint16_t cccd1=0,cccd2=0;
@@ -700,10 +895,20 @@ static void on_sync(void) {
  else memset(targets,0,sizeof(targets));
  advertise();ble_npl_callout_reset(&ticker,ble_npl_time_ms_to_ticks32(20));
 }
-static void on_reset(int reason) {ESP_LOGE(TAG,"HOST_RESET reason=%d",reason);memset(links,0,sizeof(links));tx_count=0;tx_head=0;selected_conn=-1;}
+static void on_reset(int reason) {host_reset_count++;ESP_LOGE(TAG,"HOST_RESET reason=%d",reason);memset(links,0,sizeof(links));tx_count=0;tx_head=0;selected_conn=-1;}
 static void host_task(void *p) {(void)p;nimble_port_run();nimble_port_freertos_deinit();}
 void app_main(void) {
+ r1_idle_init(&user_idle,(uint32_t)now_ms());
+ ESP_ERROR_CHECK(esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP,0,"r1_button",&button_awake_lock));
+ usb_serial_jtag_driver_config_t usb={.tx_buffer_size=1024,.rx_buffer_size=1024};
+ ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb));
  board_inputs_init();
+ esp_pm_config_t pm={.max_freq_mhz=R1_PM_MAX_CPU_MHZ,.min_freq_mhz=R1_PM_MIN_CPU_MHZ,.light_sleep_enable=true};
+ ESP_ERROR_CHECK(esp_pm_configure(&pm));
+ ESP_LOGI(TAG,"USB_POWER_CONFIG poll_ms=%u on_mv=%u off_mv=%u release_ms=%u",
+          R1_USB_VIN_POLL_MS,R1_USB_VIN_ON_MV,R1_USB_VIN_OFF_MV,R1_USB_VIN_RELEASE_MS);
+ ESP_LOGI(TAG,"POWER_CONFIG dfs=%d..%dMHz auto_light_sleep=1 main_xtal=40MHz idle_ms=%u",
+          R1_PM_MIN_CPU_MHZ,R1_PM_MAX_CPU_MHZ,R1_IDLE_TIMEOUT_MS);
  r1_i2c_init();
  r1_battery_init();
 #if R1_TOUCH_ENABLED
@@ -725,17 +930,20 @@ void app_main(void) {
  ble_svc_gap_init();ble_svc_gatt_init();ble_store_config_init();
  assert(!ble_att_set_preferred_mtu(247));
  assert(!ble_gatts_count_cfg(services));assert(!ble_gatts_add_svcs(services));
+ ble_npl_event_init(&host_work,tick,NULL);
+ __atomic_store_n(&host_work_ready,true,__ATOMIC_RELEASE);
  ble_npl_callout_init(&ticker,nimble_port_get_dflt_eventq(),tick,NULL);
  nimble_port_freertos_init(host_task);
  ESP_LOGI(TAG,"Unofficial R1 compatible remote; StopWatch gestures tested with G2 2.3.2.14");
- ESP_LOGI(TAG,"PROBE_VERSION=%s; type help then Enter",R1_PROBE_VERSION);
+ ESP_LOGI(TAG,"FIRMWARE_VERSION=%s; type help then Enter",R1_FIRMWARE_VERSION);
  struct console_command command={0};size_t used=0;bool overflow=false;
  while(1) {
-  int c=getchar();
-  if(c==EOF) {clearerr(stdin);vTaskDelay(pdMS_TO_TICKS(20));continue;}
+  uint8_t byte;
+  if(usb_serial_jtag_read_bytes(&byte,1,portMAX_DELAY)!=1) continue;
+  int c=byte;
   if(c=='\r' || c=='\n') {
    if(overflow) ESP_LOGW(TAG,"CONSOLE_LINE_TOO_LONG");
-   else if(used) {command.text[used]=0;if(xQueueSend(input_queue,&command,0)!=pdTRUE) ESP_LOGW(TAG,"CONSOLE_QUEUE_FULL");}
+   else if(used) {command.text[used]=0;if(xQueueSend(input_queue,&command,0)!=pdTRUE) ESP_LOGW(TAG,"CONSOLE_QUEUE_FULL");else request_host_work();}
    used=0;overflow=false;
   } else if(c==8 || c==127) {if(used && !overflow) used--;}
   else if(!overflow) {if(used<sizeof(command.text)-1) command.text[used++]=(char)c;else overflow=true;}

@@ -15,10 +15,27 @@ static QueueHandle_t samples;
 static volatile unsigned overflow;
 static portMUX_TYPE sample_lock=portMUX_INITIALIZER_UNLOCKED;
 static struct r1_touch_sample latest;
-struct r1_touch_sample r1_touch_hw_get(void) {
- portENTER_CRITICAL(&sample_lock);struct r1_touch_sample s=latest;portEXIT_CRITICAL(&sample_lock);return s;
+static TaskHandle_t touch_task_handle;
+static bool touch_active=true;
+static uint32_t touch_epoch;
+void r1_touch_hw_set_active(bool active) {
+ if(__atomic_load_n(&touch_active,__ATOMIC_ACQUIRE)==active) return;
+ __atomic_add_fetch(&touch_epoch,1,__ATOMIC_ACQ_REL);
+ __atomic_store_n(&touch_active,active,__ATOMIC_RELEASE);
+ if(active && touch_task_handle) xTaskNotifyGive(touch_task_handle);
 }
-bool r1_touch_hw_pop(struct r1_touch_sample *s) {return samples && xQueueReceive(samples,s,0)==pdTRUE;}
+struct r1_touch_sample r1_touch_hw_get(void) {
+ portENTER_CRITICAL(&sample_lock);struct r1_touch_sample s=latest;portEXIT_CRITICAL(&sample_lock);
+ if(!__atomic_load_n(&touch_active,__ATOMIC_ACQUIRE) ||
+    s.epoch!=__atomic_load_n(&touch_epoch,__ATOMIC_ACQUIRE)) s.valid=false;
+ return s;
+}
+bool r1_touch_hw_pop(struct r1_touch_sample *s) {
+ while(samples && xQueueReceive(samples,s,0)==pdTRUE)
+  if(__atomic_load_n(&touch_active,__ATOMIC_ACQUIRE) &&
+     s->epoch==__atomic_load_n(&touch_epoch,__ATOMIC_ACQUIRE)) return true;
+ return false;
+}
 bool r1_touch_hw_overflow(void) {
  bool result=__atomic_exchange_n(&overflow,0,__ATOMIC_RELAXED)!=0;
  if(result && samples) xQueueReset(samples);
@@ -67,6 +84,8 @@ static esp_err_t attach_ioe(void) {
  return ESP_FAIL;
 }
 static void publish(struct r1_touch_sample *s) {
+ if(!__atomic_load_n(&touch_active,__ATOMIC_ACQUIRE) ||
+    s->epoch!=__atomic_load_n(&touch_epoch,__ATOMIC_ACQUIRE)) return;
  s->ms=esp_timer_get_time()/1000;
  portENTER_CRITICAL(&sample_lock);latest=*s;portEXIT_CRITICAL(&sample_lock);
  if(xQueueSend(samples,s,0)!=pdTRUE) __atomic_store_n(&overflow,1,__ATOMIC_RELAXED);
@@ -83,6 +102,10 @@ static void touch_task(void *unused) {
  ESP_LOGI("R1TP","TOUCH_IDENT error=%s id=%02x fw=%02x",esp_err_to_name(e),id,version);
  unsigned failures=0;
  for(;;) {
+  if(!__atomic_load_n(&touch_active,__ATOMIC_ACQUIRE)) {
+   ulTaskNotifyTake(pdTRUE,portMAX_DELAY);continue;
+  }
+  uint32_t epoch=__atomic_load_n(&touch_epoch,__ATOMIC_ACQUIRE);
   struct r1_touch_sample sample={0};uint8_t bytes[7];
   e=r1_i2c_read(cst,0,bytes,sizeof(bytes));
   if(e==ESP_OK && r1_touch_decode(bytes,sizeof(bytes),&sample)) {
@@ -93,14 +116,16 @@ static void touch_task(void *unused) {
    /* Never turn a failed read into a release/tap/long press. */
    if(failures%250==0) (void)reset_touch();
   }
-  publish(&sample);vTaskDelay(pdMS_TO_TICKS(R1_TOUCH_POLL_MS));
+  sample.epoch=epoch;
+  publish(&sample);
+  ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(R1_TOUCH_POLL_MS));
  }
 }
 #endif
 void r1_touch_hw_init(void) {
 #if R1_TOUCH_ENABLED
  samples=xQueueCreate(32,sizeof(struct r1_touch_sample));
- if(!samples || xTaskCreate(touch_task,"r1_touch",4096,NULL,1,NULL)!=pdPASS)
+ if(!samples || xTaskCreate(touch_task,"r1_touch",4096,NULL,1,&touch_task_handle)!=pdPASS)
   ESP_LOGE("R1TP","TOUCH_TASK_FAILED");
 #endif
 }

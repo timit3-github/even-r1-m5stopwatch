@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: BSL-1.0
+# Copyright (c) 2026 even-r1-esp32s3 contributors.
+Release v0.3.1: Power Saving and USB Serial Stability
+
+Release date: 2026-10-14
+Project version: 0.3.1
+App compatibility string: 2.9.9.9999 (not stock R1 firmware)
+Source-only distribution; ESP-IDF 5.5.1.
+Automatic Light-sleep, 40..160MHz DFS, button wake and VIN-based USB inhibition.
+Same-setting prerelease test: about 21 hours, zero G2 disconnections and host resets.
+Final v0.3.1 host tests and ESP32-S3 build passed; final device check remains.
+See docs/releases/v0.3.1.md, docs/POWER.md and docs/VALIDATION.md.
