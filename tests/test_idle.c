@@ -32,11 +32,11 @@ int main(void) {
  assert(!r1_button_update(&b,false,61130,30,700,300,200));
  assert(r1_button_update(&b,false,61430,30,700,300,200)==R1_INPUT_CLICK);
  r1_button_init(&b,false,0);
- assert(!r1_nav_button_update(&b,true,61000,30,700,500));
- assert(!r1_nav_button_update(&b,true,61030,30,700,500));
- assert(r1_nav_button_update(&b,true,61730,30,700,500)==R1_NAV_UP);
- assert(r1_nav_button_update(&b,true,62230,30,700,500)==R1_NAV_UP);
- assert(!r1_nav_button_update(&b,false,62240,30,700,500));
- assert(!r1_nav_button_update(&b,false,62270,30,700,500));
+ assert(!r1_nav_button_update(&b,true,61000,30,700,0,700,500));
+ assert(!r1_nav_button_update(&b,true,61030,30,700,0,700,500));
+ assert(r1_nav_button_update(&b,true,61730,30,700,0,700,500)==R1_NAV_UP);
+ assert(r1_nav_button_update(&b,true,62230,30,700,0,700,500)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&b,false,62240,30,700,0,700,500));
+ assert(!r1_nav_button_update(&b,false,62270,30,700,0,700,500));
  puts("idle tests passed: timeout, unfinished work, button-only resume, first G1/G2 press, clock wrap");
 }

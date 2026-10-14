@@ -2,7 +2,7 @@
 Copyright (c) 2026 even-r1-esp32s3 contributors. -->
 # ビルド・接続
 
-ESP-IDF 5.5.1を使います。v0.3.1では省電力設定が必須です。
+ESP-IDF 5.5.1を使います。v0.3.1以降では省電力設定が必須です。
 既存sdkconfigにsdkconfig.defaultsの変更が自動で反映されるとは限らないため、次の新規設定でビルドしてください。
 
 ## 初回
@@ -51,7 +51,7 @@ idf.py -p /dev/ttyACM0 flash
 
 ## 接続確認
 
-起動時にFIRMWARE_VERSION=0.3.1、POWER_CONFIGのauto_light_sleep=1を確認します。
+起動時にFIRMWARE_VERSION=0.3.2、POWER_CONFIGのauto_light_sleep=1を確認します。
 GATT_LAYOUTに次が出ることを確認します。不一致時は広告を停止します。
 
 | Channel | RX | TX | CCCD |

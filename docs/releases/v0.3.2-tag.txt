@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: BSL-1.0
+# Copyright (c) 2026 even-r1-esp32s3 contributors.
+Release v0.3.2: Touch Toggle and Scroll Repeat
+
+Release date: 2026-10-15
+Project version: 0.3.2
+App compatibility string: 2.9.9.9999 (not stock R1 firmware)
+Source-only distribution; ESP-IDF 5.5.1.
+Persistent touch toggle with one/two vibration pulses.
+G2 short-then-hold down repeat and fixed-direction touch swipe repeat.
+Haptic initialization retries at boot and on the next toggle after failure.
+Same-code development build: touch toggle, NVS retention, repeats and vibration after power cycling confirmed.
+Final v0.3.2 host tests and ESP32-S3 build passed.
+Additional-feature endurance and repeated power-cycle stability remain unverified.
+See docs/releases/v0.3.2.md, docs/STOPWATCH.md and docs/VALIDATION.md.

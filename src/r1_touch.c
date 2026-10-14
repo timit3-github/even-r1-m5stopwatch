@@ -18,6 +18,7 @@ static struct r1_touch_sample latest;
 static TaskHandle_t touch_task_handle;
 static bool touch_active=true;
 static uint32_t touch_epoch;
+void r1_touch_hw_reset(void) {__atomic_add_fetch(&touch_epoch,1,__ATOMIC_ACQ_REL);}
 void r1_touch_hw_set_active(bool active) {
  if(__atomic_load_n(&touch_active,__ATOMIC_ACQUIRE)==active) return;
  __atomic_add_fetch(&touch_epoch,1,__ATOMIC_ACQ_REL);
@@ -48,14 +49,7 @@ static i2c_master_dev_handle_t ioe,cst;
 /* M5IOE1_PIN_4 is enum value 3 (bit3). Touch is powered by L2.
  * Update only touch-reset, preserving display and other peripherals. */
 static esp_err_t update_reg16(uint8_t reg,uint16_t set,uint16_t clear) {
- uint8_t b[2];esp_err_t e=r1_i2c_read(ioe,reg,b,2);if(e!=ESP_OK) return e;
- uint16_t value=((uint16_t)b[0]|((uint16_t)b[1]<<8));value=(value|set)&~clear;
- b[0]=(uint8_t)value;b[1]=(uint8_t)(value>>8);
- e=r1_i2c_write(ioe,reg,b,2);if(e!=ESP_OK) return e;
- vTaskDelay(pdMS_TO_TICKS(1));
- e=r1_i2c_read(ioe,reg,b,2);
- if(e==ESP_OK && (((uint16_t)b[0]|((uint16_t)b[1]<<8))&(set|clear))!=(value&(set|clear))) return ESP_FAIL;
- return e;
+ return r1_i2c_update16(ioe,reg,set,clear);
 }
 static esp_err_t reset_touch(void) {
  const uint16_t bits=1u<<3;

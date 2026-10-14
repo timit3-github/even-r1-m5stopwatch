@@ -5,12 +5,20 @@
 #define R1_BUTTON_GPIO 1 /* blue KEYB: tap gestures, active-low */
 #define R1_NAV_BUTTON_GPIO 2 /* yellow KEYA: short=down, hold=up, active-low */
 #define R1_NAV_BUTTON_HOLD_MS 700
-#define R1_NAV_BUTTON_REPEAT_MS 500 /* up repeat after first hold; 0 disables */
+#define R1_NAV_BUTTON_REPEAT_MS 500 /* up/down repeat after hold; 0 disables */
+#define R1_NAV_BUTTON_DOUBLE_MS 300 /* short release to next press */
+#define R1_NAV_BUTTON_FOLLOWUP_HOLD_MS 200 /* short then hold starts down */
 #define R1_BUTTON_DEBOUNCE_MS 30
 #define R1_BUTTON_HOLD_MS 700
 #define R1_BUTTON_DOUBLE_MS 300 /* first release to second press; single tap waits */
 #define R1_BUTTON_FOLLOWUP_HOLD_MS 200 /* experimental tap-then-hold threshold */
 #define R1_BUTTON_INTERVAL_TICKS 128 /* minimum button event spacing; 125ms at 1024Hz */
+#define R1_TOUCH_TOGGLE_WINDOW_MS 100 /* maximum G1/G2 press separation */
+#define R1_TOUCH_TOGGLE_HOLD_MS 500 /* hold both; one toggle until both released */
+#define R1_HAPTIC_ENABLED 1 /* StopWatch M5IOE1 motor; set 0 for other boards */
+#define R1_HAPTIC_PULSE_MS 100
+#define R1_HAPTIC_GAP_MS 120
+#define R1_HAPTIC_DUTY_PERCENT 60
 #define R1_ENCODER_A_GPIO -1
 #define R1_ENCODER_B_GPIO -1
 #define R1_ENCODER_EDGES_PER_STEP 4
@@ -35,7 +43,8 @@
 #define R1_TOUCH_ENABLED 1 /* StopWatch CST820B; set 0 for M5Dial */
 #define R1_TOUCH_POLL_MS 20
 #define R1_TOUCH_STALE_MS 300
-#define R1_TOUCH_SWIPE_PX 60 /* one up/down per contact */
+#define R1_TOUCH_SWIPE_PX 60 /* initial swipe threshold */
+#define R1_TOUCH_REPEAT_MS 500 /* fixed-direction repeat while touching; 0 disables */
 #define R1_TOUCH_TAP_SLOP_PX 20 /* movement beyond this cancels tap/hold */
 #define R1_TOUCH_SWIPE_REVERSE 0 /* 0: finger upward=up, downward=down */
 /* Automatic power management; BLE stays enabled. */
@@ -55,5 +64,5 @@
  * Set 1 to reject a glasses role on an exact peer-address mismatch. */
 #define R1_STRICT_TARGET_MATCH 0
 /* Old stock has one live phone role and one live glasses role (3 link slots). */
-#define R1_FIRMWARE_VERSION "0.3.1"
+#define R1_FIRMWARE_VERSION "0.3.2"
 #define R1_TX_TIMEOUT_MS 5000

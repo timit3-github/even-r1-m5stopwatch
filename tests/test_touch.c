@@ -4,7 +4,7 @@
 #include <assert.h>
 #include <stdio.h>
 static unsigned step(struct r1_touch_gesture *s,bool down,int x,int y,uint32_t ms) {
- return r1_touch_gesture_update(s,down,x,y,ms,700,300,200,20,60);
+ return r1_touch_gesture_update(s,down,x,y,ms,700,300,200,20,60,500);
 }
 static unsigned lift(struct r1_touch_gesture *s,uint32_t ms) {return step(s,false,-1,-1,ms);}
 int main(void) {
@@ -56,5 +56,30 @@ int main(void) {
  /* Millisecond timer wrap still supports hold. */
  r1_touch_gesture_init(&s,false,UINT32_MAX-200);
  assert(!step(&s,true,200,200,UINT32_MAX-100));assert(step(&s,true,200,200,599)==R1_INPUT_HOLD);
- puts("touch tests passed: frame decode, position-independent taps, hold/menu, swipe boundaries, cancellation, reset, timer wrap");
+ /* Hold a swipe: repeat after 500ms; later movement never reverses direction. */
+ r1_touch_gesture_init(&s,false,0);
+ assert(!step(&s,true,200,300,100));assert(step(&s,true,200,240,140)==R1_INPUT_UP);
+ assert(!step(&s,true,200,400,639));
+ assert(step(&s,true,200,400,640)==(R1_INPUT_UP|R1_INPUT_REPEAT));
+ assert(!step(&s,true,200,400,641));
+ assert(step(&s,true,200,400,4000)==(R1_INPUT_UP|R1_INPUT_REPEAT));
+ assert(!step(&s,true,200,400,4001));assert(!lift(&s,4500));assert(!lift(&s,5000));
+ assert(!step(&s,true,200,100,6000));assert(step(&s,true,200,160,6040)==R1_INPUT_DOWN);
+ assert(step(&s,true,200,160,6540)==(R1_INPUT_DOWN|R1_INPUT_REPEAT));
+ /* Failure/disable/reconnect reset cancels repeat until actual release. */
+ r1_touch_gesture_init(&s,true,6541);
+ assert(!step(&s,true,200,400,8000));assert(!lift(&s,8500));
+ /* Zero disables repeat, preserving initial swipe. */
+ assert(!step(&s,true,200,200,9000));assert(step(&s,true,200,140,9040)==R1_INPUT_UP);
+ assert(!r1_touch_gesture_update(&s,true,200,140,12000,700,300,200,20,60,0));
+ assert(!lift(&s,13000));
+ r1_touch_gesture_init(&s,false,UINT32_MAX-200);
+ assert(!step(&s,true,200,200,UINT32_MAX-100));
+ assert(step(&s,true,200,260,UINT32_MAX-60)==R1_INPUT_DOWN);
+ assert(!step(&s,true,200,260,438));
+ assert(step(&s,true,200,260,439)==(R1_INPUT_DOWN|R1_INPUT_REPEAT));
+ /* A swipe first recognized on release never starts a repeat. */
+ assert(!lift(&s,500));assert(!step(&s,true,200,200,1000));
+ assert(step(&s,false,200,140,1020)==R1_INPUT_UP);assert(!lift(&s,2000));
+ puts("touch tests passed: frame decode, taps/holds, swipe and fixed-direction repeat, cancellation, reset, timer wrap");
 }

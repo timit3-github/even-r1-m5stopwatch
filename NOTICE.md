@@ -31,8 +31,8 @@ that the original device manufacturer's firmware is licensed under MIT.
 
 Copyright (c) 2025, 2026 M5Stack Technology CO LTD.
 
-StopWatch battery conversion/filter behavior, touch frame decoding and IOE
-register/reset behavior are based on these official reference implementations:
+StopWatch battery conversion/filter behavior, touch frame decoding, IOE
+register/reset behavior and motor PWM control are based on these official reference implementations:
 
 - [M5StopWatch-UserDemo](https://github.com/m5stack/M5StopWatch-UserDemo/tree/6b4aa125288b6fe9dca661f10159f6e1e5ee785c), hal_pmic.cpp, hal_ioe.cpp and drivers/cst820.
 - [M5PM1](https://github.com/m5stack/M5PM1/tree/be9a5456c007c333e7ac963f33bfde1ffa5d82ee/src), voltage and I2C registers.
@@ -42,8 +42,8 @@ The StopWatch demo and M5IOE1 carry the 2026 copyright notice, preserved in
 LICENSES/M5Stack-MIT.txt. M5PM1 carries a 2025 copyright notice, preserved
 separately in LICENSES/M5PM1-MIT.txt. Both upstream MIT texts are unchanged.
 Attribution covers
-src/r1_battery.c, src/r1_battery_math.c, src/r1_touch.c and
-src/r1_touch_gesture.c. These are small C implementations; the upstream C++
+src/r1_battery.c, src/r1_battery_math.c, src/r1_touch.c,
+src/r1_touch_gesture.c and src/r1_haptic.c. These are small C implementations; the upstream C++
 libraries and demo are not bundled or build dependencies.
 
 ## Protocol facts and external dependencies

@@ -32,6 +32,8 @@ void ble_store_config_init(void);
 #include "r1_wire.h"
 #include "r1_legacy.h"
 #include "r1_inputs.h"
+#include "r1_input_queue.h"
+#include "r1_haptic.h"
 #include "r1_battery.h"
 #include "r1_usb_power.h"
 #include "r1_i2c.h"
@@ -55,6 +57,14 @@ static char device_name[24];
 static uint8_t identity_addr[6];
 static uint16_t notification_serial;
 static nvs_handle_t settings;
+static bool touch_user_enabled=true;
+static bool touch_preference_saved=true;
+static uint8_t sending_source;
+static bool sending_repeat;
+static bool g1_hold_queued,touch_hold_queued;
+static uint32_t last_nav_sent_ms,last_swipe_sent_ms;
+static void cancel_physical_inputs(unsigned sources,bool repeats_only);
+static void reset_physical_inputs(void);
 static QueueHandle_t input_queue;
 static struct ble_npl_callout ticker;
 static uint8_t targets[12];
@@ -112,11 +122,17 @@ static struct r1_button board_button;
 #endif
 #if R1_NAV_BUTTON_GPIO >= 0
 static struct r1_button nav_button;
-static uint32_t nav_last_up_ms;
 #endif
 #if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
-static char button_pending[8];
-static unsigned button_head,button_count;
+static struct r1_input_queue button_pending;
+#endif
+#if R1_TOUCH_ENABLED && R1_BUTTON_GPIO >= 0 && R1_NAV_BUTTON_GPIO >= 0
+static struct r1_chord touch_chord;
+_Static_assert(R1_TOUCH_TOGGLE_WINDOW_MS<R1_BUTTON_HOLD_MS &&
+ R1_TOUCH_TOGGLE_WINDOW_MS<R1_BUTTON_FOLLOWUP_HOLD_MS &&
+ R1_TOUCH_TOGGLE_WINDOW_MS<R1_NAV_BUTTON_HOLD_MS &&
+ R1_TOUCH_TOGGLE_WINDOW_MS<R1_NAV_BUTTON_FOLLOWUP_HOLD_MS,
+ "chord window must be shorter than every individual hold threshold");
 #endif
 #if R1_TOUCH_ENABLED
 static struct r1_touch_gesture touch_gesture;
@@ -176,6 +192,10 @@ static void board_inputs_init(void) {
  ESP_ERROR_CHECK(gpio_intr_enable(R1_ENCODER_A_GPIO));
  ESP_ERROR_CHECK(gpio_intr_enable(R1_ENCODER_B_GPIO));
 #endif
+#if R1_TOUCH_ENABLED && R1_BUTTON_GPIO >= 0 && R1_NAV_BUTTON_GPIO >= 0
+ r1_chord_init(&touch_chord,(!gpio_get_level(R1_BUTTON_GPIO))|
+    ((!gpio_get_level(R1_NAV_BUTTON_GPIO))<<1),(uint32_t)now_ms());
+#endif
  ESP_LOGI(TAG,"BOARD_INPUTS button=%d nav_button=%d encoder_a=%d encoder_b=%d edges=%d reverse=%d",R1_BUTTON_GPIO,R1_NAV_BUTTON_GPIO,R1_ENCODER_A_GPIO,R1_ENCODER_B_GPIO,R1_ENCODER_EDGES_PER_STEP,R1_ENCODER_REVERSE);
  ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
 }
@@ -190,7 +210,7 @@ struct link {
 };
 static struct link links[3];
 static uint32_t next_generation;
-struct tx_packet { uint16_t conn,attr; uint32_t generation; uint8_t len,retries; int64_t queued_ms; uint8_t bytes[244]; };
+struct tx_packet { uint16_t conn,attr; uint32_t generation; uint8_t len,retries,source; bool repeat; int64_t queued_ms; uint8_t bytes[244]; };
 static struct tx_packet tx_queue[32];
 static unsigned tx_head,tx_count;
 static void advertise(void);
@@ -221,7 +241,8 @@ static void log_bytes(const char *label,uint16_t conn,const uint8_t *p,size_t n)
 static bool queue_packet(struct link *l,uint16_t attr,const uint8_t *p,size_t n) {
  if(!n || n>244 || tx_count==32) { ESP_LOGW(TAG,"TX_QUEUE_FULL_OR_OVERSIZE"); return false; }
  struct tx_packet *t=&tx_queue[(tx_head+tx_count)%32];
- *t=(struct tx_packet){.conn=l->handle,.attr=attr,.generation=l->generation,.len=n,.queued_ms=now_ms()};
+ *t=(struct tx_packet){.conn=l->handle,.attr=attr,.generation=l->generation,.len=n,.queued_ms=now_ms(),
+   .source=sending_source,.repeat=sending_repeat};
  memcpy(t->bytes,p,n);tx_count++;request_host_work();return true;
 }
 static void reply(struct link *l,const struct r1_model *req,uint8_t status,const uint8_t *p,size_t n) {
@@ -451,7 +472,7 @@ static int gap_event(struct ble_gap_event *event,void *arg) {
   disconnect_count++;
   uint16_t h=event->disconnect.conn.conn_handle;ESP_LOGI(TAG,"DISCONNECTED conn=%u reason=%d",h,event->disconnect.reason);
   struct link *l=find_link(h);
-  if(l && l->glasses) glasses_disconnect_count++;
+  if(l && l->glasses) {glasses_disconnect_count++;reset_physical_inputs();}
   if(l) memset(l,0,sizeof(*l));
   if(selected_conn==h) selected_conn=-1;
   advertise();return 0;
@@ -513,7 +534,12 @@ static void touch_event(uint8_t type,uint8_t v0,uint8_t v1) {
  unsigned sent=0;
  for(unsigned i=0;i<3;i++) if(links[i].used && links[i].glasses && links[i].notify1 &&
    (selected_conn<0 || selected_conn==links[i].handle) && source_enabled && links[i].touch_enabled)
-  sent+=queue_packet(&links[i],tx1_handle,p,sizeof(p));
+ sent+=queue_packet(&links[i],tx1_handle,p,sizeof(p));
+ if(sent && (type==0 || type==9)) {
+  if(sending_source==R1_SOURCE_G1) g1_hold_queued=true;
+  if(sending_source==R1_SOURCE_TOUCH) touch_hold_queued=true;
+ }
+ if(type==8) g1_hold_queued=touch_hold_queued=false;
  ESP_LOGI(TAG,"TOUCH type=%u v0=%u v1=%u queued=%u source=%d selected=%d",type,v0,v1,sent,source_enabled,selected_conn);
 }
 static void gesture(char c) {
@@ -523,30 +549,76 @@ static void gesture(char c) {
  case 'h':touch_event(0,0,0);break;
  case 'm':touch_event(9,0,0);break; /* Newer R1 tap-then-long report. */
  case 'u':touch_event(4,1,1);break;
- case 'U':touch_event(4,1,1);break; /* Internal cancelable navigation repeat. */
  case 'j':touch_event(5,1,1);break;
  case 'r':touch_event(8,0,0);break;
  default:break;
  }
 }
 #if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
-static void board_button_enqueue(char command) {
- /* Retain at most one repeat while other inputs occupy the pacing queue. */
- if(command=='U') for(unsigned i=0;i<button_count;i++)
-  if(button_pending[(button_head+i)%sizeof(button_pending)]=='U') return;
- if(button_count==sizeof(button_pending)) {ESP_LOGW(TAG,"BUTTON_QUEUE_FULL");return;}
- button_pending[(button_head+button_count)%sizeof(button_pending)]=command;button_count++;
-}
-#if R1_NAV_BUTTON_GPIO >= 0
-static void board_button_cancel_repeats(void) {
- unsigned kept=0;
- for(unsigned i=0;i<button_count;i++) {
-  char command=button_pending[(button_head+i)%sizeof(button_pending)];
-  if(command!='U') button_pending[(button_head+kept++)%sizeof(button_pending)]=command;
+static void board_button_enqueue(char command,unsigned source,bool repeat) {
+ /* No repeat backlog in either the input or BLE notification queue. */
+ if(repeat) for(unsigned i=0;i<tx_count;i++) {
+  const struct tx_packet *t=&tx_queue[(tx_head+i)%32];
+  if(t->repeat && t->source==source) return;
  }
- button_count=kept;
+ if(!r1_input_queue_push(&button_pending,(struct r1_pending_input){command,source,repeat}))
+  ESP_LOGW(TAG,"BUTTON_QUEUE_FULL");
 }
 #endif
+static void cancel_physical_inputs(unsigned sources,bool repeats_only) {
+#if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
+ r1_input_queue_cancel(&button_pending,sources,repeats_only);
+#endif
+ unsigned kept=0;
+ for(unsigned i=0;i<tx_count;i++) {
+  struct tx_packet *t=&tx_queue[(tx_head+i)%32];
+  if(!(t->source&sources) || (repeats_only && !t->repeat))
+   tx_queue[(tx_head+kept++)%32]=*t;
+ }
+ tx_count=kept;
+}
+static void reset_physical_inputs(void) {
+ cancel_physical_inputs(R1_SOURCE_ALL,false);
+ g1_hold_queued=touch_hold_queued=false;
+#if R1_BUTTON_GPIO >= 0
+ r1_button_init(&board_button,!gpio_get_level(R1_BUTTON_GPIO),(uint32_t)now_ms());
+#endif
+#if R1_NAV_BUTTON_GPIO >= 0
+ r1_button_init(&nav_button,!gpio_get_level(R1_NAV_BUTTON_GPIO),(uint32_t)now_ms());
+#endif
+#if R1_TOUCH_ENABLED
+ r1_touch_hw_reset();
+ r1_touch_gesture_init(&touch_gesture,true,(uint32_t)now_ms());
+#endif
+}
+static bool physical_repeat_ready(unsigned source,uint32_t current) {
+ uint32_t previous=source==R1_SOURCE_NAV?last_nav_sent_ms:last_swipe_sent_ms;
+ uint32_t interval=source==R1_SOURCE_NAV?R1_NAV_BUTTON_REPEAT_MS:R1_TOUCH_REPEAT_MS;
+ return interval && (uint32_t)(current-previous)>=interval;
+}
+#if R1_TOUCH_ENABLED
+static void cancel_touch_gesture(bool ready,uint32_t current) {
+ cancel_physical_inputs(R1_SOURCE_TOUCH,false);
+ /* Completion must survive further bad samples, standby or a manual pause. */
+ if(ready && touch_hold_queued) gesture('r');
+ touch_hold_queued=false;
+ r1_touch_gesture_init(&touch_gesture,true,current);
+}
+#endif
+#if R1_TOUCH_ENABLED && R1_BUTTON_GPIO >= 0 && R1_NAV_BUTTON_GPIO >= 0
+static void toggle_touch(void) {
+ touch_user_enabled=!touch_user_enabled;
+ cancel_physical_inputs(R1_SOURCE_TOUCH,false);
+ r1_touch_hw_set_active(touch_user_enabled && !user_idle.waiting);
+ r1_touch_gesture_init(&touch_gesture,true,(uint32_t)now_ms());
+ r1_haptic_touch_toggle(touch_user_enabled);
+ /* Feedback acknowledges the toggle, independent of persistence success. */
+ esp_err_t e=nvs_set_u8(settings,"touch_on",touch_user_enabled?1:0);
+ if(e==ESP_OK) e=nvs_commit(settings);
+ touch_preference_saved=e==ESP_OK;
+ ESP_LOGI(TAG,"TOUCH_USER enabled=%d saved=%d",touch_user_enabled,touch_preference_saved);
+ if(e!=ESP_OK) ESP_LOGE(TAG,"NVS_SAVE key=touch_on error=%s",esp_err_to_name(e));
+}
 #endif
 static void board_buttons_update(bool ready,bool button_down,bool nav_down,uint32_t current) {
  (void)ready;(void)button_down;(void)nav_down;(void)current;
@@ -554,6 +626,23 @@ static void board_buttons_update(bool ready,bool button_down,bool nav_down,uint3
     replay its older timestamp backwards into unsigned debounce arithmetic. */
  if((int32_t)(current-button_sample_ms)<0) current=button_sample_ms;
  button_sample_ms=current;
+#if R1_TOUCH_ENABLED && R1_BUTTON_GPIO >= 0 && R1_NAV_BUTTON_GPIO >= 0
+ unsigned chord=r1_chord_update(&touch_chord,button_down|(nav_down<<1),current,
+   R1_BUTTON_DEBOUNCE_MS,R1_TOUCH_TOGGLE_WINDOW_MS,R1_TOUCH_TOGGLE_HOLD_MS);
+ if(chord&R1_CHORD_START) {
+  bool release=g1_hold_queued || touch_hold_queued;
+  reset_physical_inputs();
+  /* Finish an already-started long tap; the chord never sends a new gesture. */
+  if(release && ready) gesture('r');
+  ESP_LOGI(TAG,"TOUCH_CHORD start");
+ }
+ if(chord&R1_CHORD_TOGGLE) toggle_touch();
+ if(chord&R1_CHORD_BLOCK) {
+  r1_button_init(&board_button,button_down,current);
+  r1_button_init(&nav_button,nav_down,current);
+  return;
+ }
+#endif
 #if R1_BUTTON_GPIO >= 0
  if(button_down!=board_button.raw) ESP_LOGI(TAG,"BUTTON_RAW down=%d ready=%d",button_down,ready);
  if(!ready) r1_button_init(&board_button,button_down,(uint32_t)current);
@@ -565,31 +654,34 @@ static void board_buttons_update(bool ready,bool button_down,bool nav_down,uint3
     board_button.stable,ready,board_button.followup,board_button.held,board_button.active_hold_ms,
     (uint32_t)current-board_button.pressed_ms);
  if(events) ESP_LOGI(TAG,"BUTTON events=%u",events);
- if(events&R1_INPUT_CLICK) board_button_enqueue('s');
- if(events&R1_INPUT_DOUBLE) board_button_enqueue('d');
- if(events&R1_INPUT_TAP_HOLD) board_button_enqueue('m');
- if(events&R1_INPUT_HOLD) board_button_enqueue('h');
- if(events&R1_INPUT_RELEASE) board_button_enqueue('r');
+ if(events&R1_INPUT_CLICK) board_button_enqueue('s',R1_SOURCE_G1,false);
+ if(events&R1_INPUT_DOUBLE) board_button_enqueue('d',R1_SOURCE_G1,false);
+ if(events&R1_INPUT_TAP_HOLD) board_button_enqueue('m',R1_SOURCE_G1,false);
+ if(events&R1_INPUT_HOLD) board_button_enqueue('h',R1_SOURCE_G1,false);
+ if(events&R1_INPUT_RELEASE) board_button_enqueue('r',R1_SOURCE_G1,false);
 #endif
 #if R1_NAV_BUTTON_GPIO >= 0
+ if(!nav_down) cancel_physical_inputs(R1_SOURCE_NAV,true);
  if(nav_down!=nav_button.raw) ESP_LOGI(TAG,"NAV_BUTTON_RAW down=%d ready=%d",nav_down,ready);
  if(!ready) r1_button_init(&nav_button,nav_down,(uint32_t)current);
  bool nav_was_stable=nav_button.stable;
  bool nav_was_held=nav_button.held;
  unsigned nav_action=r1_nav_button_update(&nav_button,nav_down,(uint32_t)current,
-   R1_BUTTON_DEBOUNCE_MS,R1_NAV_BUTTON_HOLD_MS,R1_NAV_BUTTON_REPEAT_MS);
+   R1_BUTTON_DEBOUNCE_MS,R1_NAV_BUTTON_HOLD_MS,R1_NAV_BUTTON_DOUBLE_MS,
+   R1_NAV_BUTTON_FOLLOWUP_HOLD_MS,R1_NAV_BUTTON_REPEAT_MS);
  if(nav_button.stable!=nav_was_stable)
   ESP_LOGI(TAG,"NAV_BUTTON_EDGE down=%d ready=%d held=%d",nav_button.stable,ready,nav_button.held);
- if(nav_action) ESP_LOGI(TAG,"NAV_BUTTON action=%s repeat=%d",nav_action==R1_NAV_UP?"up":"down",nav_action==R1_NAV_UP && nav_was_held);
- if(nav_action==R1_NAV_DOWN) board_button_enqueue('j');
- if(nav_action==R1_NAV_UP) board_button_enqueue(nav_was_held?'U':'u');
+ if(nav_action) ESP_LOGI(TAG,"NAV_BUTTON action=%s repeat=%d",nav_action==R1_NAV_UP?"up":"down",nav_was_held);
+ if(nav_action==R1_NAV_DOWN) board_button_enqueue('j',R1_SOURCE_NAV,nav_was_held);
+ if(nav_action==R1_NAV_UP) board_button_enqueue('u',R1_SOURCE_NAV,nav_was_held);
 #endif
 }
 static void idle_transition(bool before) {
  if(before==user_idle.waiting) return;
  __atomic_store_n(&waiting_snapshot,user_idle.waiting,__ATOMIC_RELEASE);
- r1_touch_hw_set_active(!user_idle.waiting);
+ r1_touch_hw_set_active(touch_user_enabled && !user_idle.waiting);
 #if R1_TOUCH_ENABLED
+ cancel_physical_inputs(R1_SOURCE_TOUCH,true);
  r1_touch_gesture_init(&touch_gesture,true,(uint32_t)now_ms());
 #endif
  ESP_LOGI(TAG,"POWER_USER state=%s entries=%lu resumes=%lu",user_idle.waiting?"waiting":"active",
@@ -613,37 +705,42 @@ static void board_inputs_poll(int64_t current) {
    (selected_conn<0 || selected_conn==links[i].handle)) ready=true;
  (void)ready;
 #if R1_TOUCH_ENABLED
- if(!user_idle.waiting) {
+ bool touch_allowed=ready && touch_user_enabled && !user_idle.waiting;
+#if R1_BUTTON_GPIO >= 0 && R1_NAV_BUTTON_GPIO >= 0
+ touch_allowed=touch_allowed && !touch_chord.blocked;
+#endif
+ if(touch_allowed) {
  if(r1_touch_hw_overflow()) {
-  if(touch_gesture.button.held) board_button_enqueue('r');
-  r1_touch_gesture_init(&touch_gesture,true,(uint32_t)current);
+  cancel_touch_gesture(ready,(uint32_t)current);
   ESP_LOGW(TAG,"TOUCH_QUEUE_OVERFLOW gesture canceled");
  }
  struct r1_touch_sample sample;
  for(unsigned i=0;i<32 && r1_touch_hw_pop(&sample);i++) {
   if(!sample.valid || !ready || current-sample.ms>R1_TOUCH_STALE_MS) {
-   if(ready && touch_gesture.button.held) board_button_enqueue('r');
-   r1_touch_gesture_init(&touch_gesture,true,(uint32_t)current);continue;
+   cancel_touch_gesture(ready,(uint32_t)current);continue;
   }
   bool was_down=touch_gesture.contact;
   unsigned tp=r1_touch_gesture_update(&touch_gesture,sample.down,sample.position?sample.x:-1,sample.position?sample.y:-1,
    (uint32_t)sample.ms,R1_BUTTON_HOLD_MS,R1_BUTTON_DOUBLE_MS,R1_BUTTON_FOLLOWUP_HOLD_MS,
-   R1_TOUCH_TAP_SLOP_PX,R1_TOUCH_SWIPE_PX);
+   R1_TOUCH_TAP_SLOP_PX,R1_TOUCH_SWIPE_PX,R1_TOUCH_REPEAT_MS);
   if(was_down!=sample.down) ESP_LOGI(TAG,"TOUCH_EDGE down=%d x=%u y=%u",sample.down,sample.x,sample.y);
   if(tp) ESP_LOGI(TAG,"TOUCH_GESTURE events=%u x=%u y=%u",tp,sample.x,sample.y);
-  if(tp&R1_INPUT_CLICK) board_button_enqueue('s');
-  if(tp&R1_INPUT_DOUBLE) board_button_enqueue('d');
-  if(tp&R1_INPUT_TAP_HOLD) board_button_enqueue('m');
-  if(tp&R1_INPUT_HOLD) board_button_enqueue('h');
-  if(tp&R1_INPUT_RELEASE) board_button_enqueue('r');
-  if(tp&R1_INPUT_UP) board_button_enqueue(R1_TOUCH_SWIPE_REVERSE?'j':'u');
-  if(tp&R1_INPUT_DOWN) board_button_enqueue(R1_TOUCH_SWIPE_REVERSE?'u':'j');
+  if(!sample.down) cancel_physical_inputs(R1_SOURCE_TOUCH,true);
+  if(tp&R1_INPUT_CLICK) board_button_enqueue('s',R1_SOURCE_TOUCH,false);
+  if(tp&R1_INPUT_DOUBLE) board_button_enqueue('d',R1_SOURCE_TOUCH,false);
+  if(tp&R1_INPUT_TAP_HOLD) board_button_enqueue('m',R1_SOURCE_TOUCH,false);
+  if(tp&R1_INPUT_HOLD) board_button_enqueue('h',R1_SOURCE_TOUCH,false);
+  if(tp&R1_INPUT_RELEASE) board_button_enqueue('r',R1_SOURCE_TOUCH,false);
+  if(tp&R1_INPUT_UP) board_button_enqueue(R1_TOUCH_SWIPE_REVERSE?'j':'u',R1_SOURCE_TOUCH,(tp&R1_INPUT_REPEAT)!=0);
+  if(tp&R1_INPUT_DOWN) board_button_enqueue(R1_TOUCH_SWIPE_REVERSE?'u':'j',R1_SOURCE_TOUCH,(tp&R1_INPUT_REPEAT)!=0);
  }
  struct r1_touch_sample last_sample=r1_touch_hw_get();
+ if(!last_sample.down) cancel_physical_inputs(R1_SOURCE_TOUCH,true);
  if(!ready || !last_sample.valid || current-last_sample.ms>R1_TOUCH_STALE_MS) {
-  if(ready && touch_gesture.button.held) board_button_enqueue('r');
-  r1_touch_gesture_init(&touch_gesture,true,(uint32_t)current);
+  cancel_touch_gesture(ready,(uint32_t)current);
  }
+ } else {
+  cancel_touch_gesture(ready,(uint32_t)current);
  }
 #endif
  /* Replay captured edges on the host, settling the prior level first.
@@ -651,6 +748,10 @@ static void board_inputs_poll(int64_t current) {
  struct button_edge edge;
  if(__atomic_exchange_n(&button_edge_overflow,0,__ATOMIC_RELAXED)) {
   xQueueReset(button_edges);
+  reset_physical_inputs();
+#if R1_TOUCH_ENABLED && R1_BUTTON_GPIO >= 0 && R1_NAV_BUTTON_GPIO >= 0
+  r1_chord_init(&touch_chord,3,(uint32_t)current);
+#endif
 #if R1_BUTTON_GPIO >= 0
   r1_button_init(&board_button,!gpio_get_level(R1_BUTTON_GPIO),(uint32_t)current);
 #endif
@@ -690,23 +791,21 @@ static void board_inputs_poll(int64_t current) {
  rearm_button(R1_NAV_BUTTON_GPIO,nav_down);
 #endif
 #if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
- if(!ready) {button_count=0;button_head=0;}
-#if R1_NAV_BUTTON_GPIO >= 0
- /* A repeat waiting behind another gesture must not outlive button release. */
- if(!nav_button.raw) board_button_cancel_repeats();
-#endif
+ if(!ready) cancel_physical_inputs(R1_SOURCE_ALL,false);
  uint32_t button_tick=(uint32_t)((esp_timer_get_time()*1024)/1000000);
  bool repeat_ready=true;
+ const struct r1_pending_input *input=r1_input_queue_peek(&button_pending);
+ if(input && input->repeat) repeat_ready=physical_repeat_ready(input->source,(uint32_t)current);
+ if(input && repeat_ready && (input->command=='r' || !last_touch_tick || button_tick-last_touch_tick>=R1_BUTTON_INTERVAL_TICKS)) {
+  sending_source=input->source;sending_repeat=input->repeat;
+  gesture(input->command);
+  sending_source=0;sending_repeat=false;
+  if((input->command=='u' || input->command=='j') && input->source==R1_SOURCE_NAV) {
 #if R1_NAV_BUTTON_GPIO >= 0
- if(button_count && button_pending[button_head]=='U')
-  repeat_ready=(uint32_t)current-nav_last_up_ms>=R1_NAV_BUTTON_REPEAT_MS;
+   nav_button.nav_repeat_ms=(uint32_t)current;
 #endif
- if(button_count && repeat_ready && (button_pending[button_head]=='r' || !last_touch_tick || button_tick-last_touch_tick>=R1_BUTTON_INTERVAL_TICKS)) {
-  char command=button_pending[button_head];gesture(command);
-#if R1_NAV_BUTTON_GPIO >= 0
-  if(command=='u' || command=='U') nav_last_up_ms=(uint32_t)current;
-#endif
-  button_head=(button_head+1)%sizeof(button_pending);button_count--;
+  }
+  r1_input_queue_pop(&button_pending);
  }
 #else
  (void)current;
@@ -748,7 +847,7 @@ static void dump_status(void) {
           vin.valid,vin.millivolts,vin.present,vin.lock_held,vin.release_pending,
           (long long)(vin.sample_ms?now_ms()-vin.sample_ms:-1),(unsigned long)vin.failures);
  struct r1_touch_sample tp=r1_touch_hw_get();
- ESP_LOGI(TAG,"TOUCH_PANEL enabled=%d valid=%d down=%d x=%u y=%u age_ms=%lld",R1_TOUCH_ENABLED,tp.valid,tp.down,tp.x,tp.y,(long long)(tp.ms?now_ms()-tp.ms:-1));
+ ESP_LOGI(TAG,"TOUCH_PANEL enabled=%d user_enabled=%d saved=%d valid=%d down=%d x=%u y=%u age_ms=%lld",R1_TOUCH_ENABLED,touch_user_enabled,touch_preference_saved,tp.valid,tp.down,tp.x,tp.y,(long long)(tp.ms?now_ms()-tp.ms:-1));
  log_bytes("TARGETS_LE_RAW",0,targets,sizeof(targets));
  for(unsigned i=0;i<3;i++) if(links[i].used) {
   struct link *l=&links[i];
@@ -829,11 +928,19 @@ static void tick(struct ble_npl_event *ev) {
   struct tx_packet *t=&tx_queue[tx_head];struct link *l=find_link(t->conn);bool remove=false;
   if(!l || l->generation!=t->generation || (t->attr==tx1_handle?!l->notify1:!l->notify2)) remove=true;
   else if(current-t->queued_ms>R1_TX_TIMEOUT_MS) {ESP_LOGW(TAG,"TX_TIMEOUT conn=%u len=%u mtu=%u",t->conn,t->len,ble_att_mtu(t->conn));remove=true;}
+  else if(t->repeat && !physical_repeat_ready(t->source,(uint32_t)current)) { /* Keep repeat spacing at BLE handoff too. */ }
   else if(t->len>ble_att_mtu(t->conn)-3) { /* wait for MTU exchange until the deadline */ }
   else {
    struct os_mbuf *om=ble_hs_mbuf_from_flat(t->bytes,t->len);
    int rc=om?ble_gatts_notify_custom(t->conn,t->attr,om):BLE_HS_ENOMEM;
-   if(!rc) {if(!r1_power_waiting()) log_bytes(t->attr==tx1_handle?"TX_CH1":"TX_CH2",t->conn,t->bytes,t->len);remove=true;}
+   if(!rc) {
+    if(t->source && t->len==11 && (t->bytes[4]==4 || t->bytes[4]==5)) {
+     if(t->source==R1_SOURCE_NAV) last_nav_sent_ms=(uint32_t)current;
+     else if(t->source==R1_SOURCE_TOUCH) last_swipe_sent_ms=(uint32_t)current;
+    }
+    if(!r1_power_waiting()) log_bytes(t->attr==tx1_handle?"TX_CH1":"TX_CH2",t->conn,t->bytes,t->len);
+    remove=true;
+   }
    else if(++t->retries>=10) {ESP_LOGW(TAG,"TX_FAILED conn=%u rc=%d",t->conn,rc);remove=true;}
   }
   if(remove) {tx_head=(tx_head+1)%32;tx_count--;}
@@ -848,7 +955,7 @@ static void tick(struct ble_npl_event *ev) {
  button_down|=nav_button.raw || nav_button.stable;
 #endif
 #if R1_BUTTON_GPIO >= 0 || R1_NAV_BUTTON_GPIO >= 0 || R1_TOUCH_ENABLED
- busy|=button_count!=0;
+ busy|=button_pending.count!=0;
 #endif
 #if R1_ENCODER_A_GPIO >= 0 && R1_ENCODER_B_GPIO >= 0
  busy|=pending_encoder || uxQueueMessagesWaiting(encoder_queue);
@@ -895,7 +1002,7 @@ static void on_sync(void) {
  else memset(targets,0,sizeof(targets));
  advertise();ble_npl_callout_reset(&ticker,ble_npl_time_ms_to_ticks32(20));
 }
-static void on_reset(int reason) {host_reset_count++;ESP_LOGE(TAG,"HOST_RESET reason=%d",reason);memset(links,0,sizeof(links));tx_count=0;tx_head=0;selected_conn=-1;}
+static void on_reset(int reason) {host_reset_count++;ESP_LOGE(TAG,"HOST_RESET reason=%d",reason);reset_physical_inputs();memset(links,0,sizeof(links));tx_count=0;tx_head=0;selected_conn=-1;}
 static void host_task(void *p) {(void)p;nimble_port_run();nimble_port_freertos_deinit();}
 void app_main(void) {
  r1_idle_init(&user_idle,(uint32_t)now_ms());
@@ -910,13 +1017,23 @@ void app_main(void) {
  ESP_LOGI(TAG,"POWER_CONFIG dfs=%d..%dMHz auto_light_sleep=1 main_xtal=40MHz idle_ms=%u",
           R1_PM_MIN_CPU_MHZ,R1_PM_MAX_CPU_MHZ,R1_IDLE_TIMEOUT_MS);
  r1_i2c_init();
+ r1_haptic_init();
  r1_battery_init();
+ /* Never auto-erase NVS on failure: persisted bonds must not silently vanish. */
+ ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("r1test",NVS_READWRITE,&settings));
+ uint8_t touch_on=1;
+ esp_err_t preference_error=nvs_get_u8(settings,"touch_on",&touch_on);
+ if(preference_error==ESP_OK && touch_on<=1) touch_user_enabled=touch_on!=0;
+ else if(preference_error!=ESP_ERR_NVS_NOT_FOUND) {
+  touch_preference_saved=false;
+  ESP_LOGW(TAG,"NVS_LOAD key=touch_on error=%s value=%u",esp_err_to_name(preference_error),touch_on);
+ }
+ ESP_LOGI(TAG,"TOUCH_USER enabled=%d saved=%d",touch_user_enabled,touch_preference_saved);
+ r1_touch_hw_set_active(touch_user_enabled);
 #if R1_TOUCH_ENABLED
  r1_touch_gesture_init(&touch_gesture,true,(uint32_t)now_ms());
 #endif
  r1_touch_hw_init();
- /* Never auto-erase NVS on failure: persisted bonds must not silently vanish. */
- ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("r1test",NVS_READWRITE,&settings));
  _Static_assert(sizeof(R1_SERIAL)==16,"R1_SERIAL must be 15 ASCII bytes");
  _Static_assert(sizeof(R1_APP_VERSION)<=16,"app version exceeds slot");
  _Static_assert(sizeof(R1_HW_VERSION)<=16,"hardware version exceeds slot");

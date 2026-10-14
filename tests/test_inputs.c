@@ -4,6 +4,9 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
+static unsigned nav_step(struct r1_button *s,bool down,uint32_t ms) {
+ return r1_nav_button_update(s,down,ms,30,700,300,200,500);
+}
 
 int main(void) {
  struct r1_encoder e;
@@ -134,89 +137,120 @@ int main(void) {
 
  /* StopWatch navigation: each short click is down; holding is only one up. */
  struct r1_button nav;r1_button_init(&nav,false,0);
- assert(!r1_nav_button_update(&nav,true,10,30,700,0));
- assert(!r1_nav_button_update(&nav,true,40,30,700,0));
- assert(!r1_nav_button_update(&nav,false,100,30,700,0));
- assert(r1_nav_button_update(&nav,false,130,30,700,0)==R1_NAV_DOWN);
- assert(!r1_nav_button_update(&nav,true,150,30,700,0));
- assert(!r1_nav_button_update(&nav,true,180,30,700,0));
- assert(!r1_nav_button_update(&nav,false,220,30,700,0));
- assert(r1_nav_button_update(&nav,false,250,30,700,0)==R1_NAV_DOWN);
- assert(!r1_nav_button_update(&nav,true,300,30,700,0));
- assert(!r1_nav_button_update(&nav,true,330,30,700,0));
- assert(!r1_nav_button_update(&nav,true,1029,30,700,0));
- assert(r1_nav_button_update(&nav,true,1030,30,700,0)==R1_NAV_UP);
- assert(!r1_nav_button_update(&nav,true,1200,30,700,0));
- assert(!r1_nav_button_update(&nav,false,1500,30,700,0));
- assert(!r1_nav_button_update(&nav,false,1530,30,700,0));
- assert(!r1_nav_button_update(&nav,false,1600,30,700,0));
+ assert(!r1_nav_button_update(&nav,true,10,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,true,40,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,100,30,700,0,700,0));
+ assert(r1_nav_button_update(&nav,false,130,30,700,0,700,0)==R1_NAV_DOWN);
+ assert(!r1_nav_button_update(&nav,true,150,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,true,180,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,220,30,700,0,700,0));
+ assert(r1_nav_button_update(&nav,false,250,30,700,0,700,0)==R1_NAV_DOWN);
+ assert(!r1_nav_button_update(&nav,true,300,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,true,330,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,true,1029,30,700,0,700,0));
+ assert(r1_nav_button_update(&nav,true,1030,30,700,0,700,0)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,true,1200,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,1500,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,1530,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,1600,30,700,0,700,0));
  /* Release debounce must not convert a 699ms press into a long press. */
  r1_button_init(&nav,false,0);
- assert(!r1_nav_button_update(&nav,true,10,30,700,0));
- assert(!r1_nav_button_update(&nav,true,40,30,700,0));
- assert(!r1_nav_button_update(&nav,false,739,30,700,0));
- assert(r1_nav_button_update(&nav,false,769,30,700,0)==R1_NAV_DOWN);
+ assert(!r1_nav_button_update(&nav,true,10,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,true,40,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,739,30,700,0,700,0));
+ assert(r1_nav_button_update(&nav,false,769,30,700,0,700,0)==R1_NAV_DOWN);
  /* At 700ms, even a late release poll sends up without down. */
  r1_button_init(&nav,false,0);
- assert(!r1_nav_button_update(&nav,true,10,30,700,0));
- assert(!r1_nav_button_update(&nav,true,40,30,700,0));
- assert(!r1_nav_button_update(&nav,false,740,30,700,0));
- assert(r1_nav_button_update(&nav,false,770,30,700,0)==R1_NAV_UP);
- assert(!r1_nav_button_update(&nav,false,800,30,700,0));
+ assert(!r1_nav_button_update(&nav,true,10,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,true,40,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,740,30,700,0,700,0));
+ assert(r1_nav_button_update(&nav,false,770,30,700,0,700,0)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,false,800,30,700,0,700,0));
  /* GPIO1 pending tap must survive unrelated GPIO2 navigation. */
  r1_button_init(&b,false,0);r1_button_init(&nav,false,0);
  assert(!r1_button_update(&b,true,10,30,700,300,200));
  assert(!r1_button_update(&b,true,40,30,700,300,200));
  assert(!r1_button_update(&b,false,100,30,700,300,200));
  assert(!r1_button_update(&b,false,130,30,700,300,200));
- assert(!r1_nav_button_update(&nav,true,200,30,700,0));
- assert(!r1_nav_button_update(&nav,true,230,30,700,0));
- assert(!r1_nav_button_update(&nav,false,300,30,700,0));
- assert(r1_nav_button_update(&nav,false,330,30,700,0)==R1_NAV_DOWN);
+ assert(!r1_nav_button_update(&nav,true,200,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,true,230,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,300,30,700,0,700,0));
+ assert(r1_nav_button_update(&nav,false,330,30,700,0,700,0)==R1_NAV_DOWN);
  assert(r1_button_update(&b,false,430,30,700,300,200)==R1_INPUT_CLICK);
  r1_button_init(&nav,true,0);
- assert(!r1_nav_button_update(&nav,true,1000,30,700,0));
- assert(!r1_nav_button_update(&nav,false,1010,30,700,0));
- assert(!r1_nav_button_update(&nav,false,1040,30,700,0));
+ assert(!r1_nav_button_update(&nav,true,1000,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,1010,30,700,0,700,0));
+ assert(!r1_nav_button_update(&nav,false,1040,30,700,0,700,0));
  /* Repeat begins 500ms after first hold, stops on raw release, no catch-up. */
  r1_button_init(&nav,false,0);
- assert(!r1_nav_button_update(&nav,true,10,30,700,500));
- assert(!r1_nav_button_update(&nav,true,40,30,700,500));
- assert(!r1_nav_button_update(&nav,true,739,30,700,500));
- assert(r1_nav_button_update(&nav,true,740,30,700,500)==R1_NAV_UP);
- assert(!r1_nav_button_update(&nav,true,1239,30,700,500));
- assert(r1_nav_button_update(&nav,true,1240,30,700,500)==R1_NAV_UP);
- assert(!r1_nav_button_update(&nav,true,1241,30,700,500));
- assert(r1_nav_button_update(&nav,true,1740,30,700,500)==R1_NAV_UP);
- assert(r1_nav_button_update(&nav,true,4000,30,700,500)==R1_NAV_UP);
- assert(!r1_nav_button_update(&nav,true,4001,30,700,500));
- assert(!r1_nav_button_update(&nav,true,4499,30,700,500));
- assert(!r1_nav_button_update(&nav,false,4500,30,700,500));
+ assert(!r1_nav_button_update(&nav,true,10,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,true,40,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,true,739,30,700,0,700,500));
+ assert(r1_nav_button_update(&nav,true,740,30,700,0,700,500)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,true,1239,30,700,0,700,500));
+ assert(r1_nav_button_update(&nav,true,1240,30,700,0,700,500)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,true,1241,30,700,0,700,500));
+ assert(r1_nav_button_update(&nav,true,1740,30,700,0,700,500)==R1_NAV_UP);
+ assert(r1_nav_button_update(&nav,true,4000,30,700,0,700,500)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,true,4001,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,true,4499,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,false,4500,30,700,0,700,500));
  /* Release contact bounce cannot cause a due repeat. */
- assert(!r1_nav_button_update(&nav,true,4510,30,700,500));
- assert(!r1_nav_button_update(&nav,false,4520,30,700,500));
- assert(!r1_nav_button_update(&nav,false,4550,30,700,500));
- assert(!r1_nav_button_update(&nav,false,5000,30,700,500));
+ assert(!r1_nav_button_update(&nav,true,4510,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,false,4520,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,false,4550,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,false,5000,30,700,0,700,500));
  /* A new press starts with the normal hold delay, not an old repeat deadline. */
- assert(!r1_nav_button_update(&nav,true,5100,30,700,500));
- assert(!r1_nav_button_update(&nav,true,5130,30,700,500));
- assert(!r1_nav_button_update(&nav,true,5829,30,700,500));
- assert(r1_nav_button_update(&nav,true,5830,30,700,500)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,true,5100,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,true,5130,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,true,5829,30,700,0,700,500));
+ assert(r1_nav_button_update(&nav,true,5830,30,700,0,700,500)==R1_NAV_UP);
  /* Configurable 1000ms period and repeated polls at the same time. */
- assert(!r1_nav_button_update(&nav,true,6829,30,700,1000));
- assert(r1_nav_button_update(&nav,true,6830,30,700,1000)==R1_NAV_UP);
- assert(!r1_nav_button_update(&nav,true,6830,30,700,1000));
+ assert(!r1_nav_button_update(&nav,true,6829,30,700,0,700,1000));
+ assert(r1_nav_button_update(&nav,true,6830,30,700,0,700,1000)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,true,6830,30,700,0,700,1000));
  /* Reset on connection loss while held suppresses all ups until release. */
  r1_button_init(&nav,true,7000);
- assert(!r1_nav_button_update(&nav,true,10000,30,700,500));
- assert(!r1_nav_button_update(&nav,false,10010,30,700,500));
- assert(!r1_nav_button_update(&nav,false,10040,30,700,500));
+ assert(!r1_nav_button_update(&nav,true,10000,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,false,10010,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,false,10040,30,700,0,700,500));
  /* Repeat period and first hold cross the uint32 clock boundary. */
  r1_button_init(&nav,false,UINT32_MAX-820);
- assert(!r1_nav_button_update(&nav,true,UINT32_MAX-800,30,700,500));
- assert(!r1_nav_button_update(&nav,true,UINT32_MAX-770,30,700,500));
- assert(r1_nav_button_update(&nav,true,UINT32_MAX-70,30,700,500)==R1_NAV_UP);
- assert(!r1_nav_button_update(&nav,true,428,30,700,500));
- assert(r1_nav_button_update(&nav,true,429,30,700,500)==R1_NAV_UP);
- puts("input tests passed: tap/navigation regressions, 500ms repeat, configurable period, release/bounce stop, no catch-up, connection reset, timer wrap");
+ assert(!r1_nav_button_update(&nav,true,UINT32_MAX-800,30,700,0,700,500));
+ assert(!r1_nav_button_update(&nav,true,UINT32_MAX-770,30,700,0,700,500));
+ assert(r1_nav_button_update(&nav,true,UINT32_MAX-70,30,700,0,700,500)==R1_NAV_UP);
+ assert(!r1_nav_button_update(&nav,true,428,30,700,0,700,500));
+ assert(r1_nav_button_update(&nav,true,429,30,700,0,700,500)==R1_NAV_UP);
+ /* New default: the first short release remains immediate down. */
+ r1_button_init(&nav,false,0);
+ assert(!nav_step(&nav,true,10));assert(!nav_step(&nav,true,40));
+ assert(!nav_step(&nav,false,100));assert(nav_step(&nav,false,130)==R1_NAV_DOWN);
+ assert(!nav_step(&nav,true,430));assert(!nav_step(&nav,true,460)); /* exact window */
+ assert(!nav_step(&nav,true,659));assert(nav_step(&nav,true,660)==R1_NAV_DOWN);
+ assert(!nav_step(&nav,true,1159));assert(nav_step(&nav,true,1160)==R1_NAV_DOWN);
+ assert(nav_step(&nav,true,4000)==R1_NAV_DOWN);assert(!nav_step(&nav,true,4001));
+ assert(!nav_step(&nav,false,4500));assert(!nav_step(&nav,false,4530));
+ /* An expired shortcut window retains the normal up direction and delay. */
+ r1_button_init(&nav,false,0);
+ assert(!nav_step(&nav,true,10));assert(!nav_step(&nav,true,40));
+ assert(!nav_step(&nav,false,100));assert(nav_step(&nav,false,130)==R1_NAV_DOWN);
+ assert(!nav_step(&nav,true,431));assert(!nav_step(&nav,true,461));
+ assert(!nav_step(&nav,true,1160));assert(nav_step(&nav,true,1161)==R1_NAV_UP);
+ /* Second short tap also sends down immediately; late release of hold is down. */
+ r1_button_init(&nav,false,0);
+ assert(!nav_step(&nav,true,10));assert(!nav_step(&nav,true,40));
+ assert(!nav_step(&nav,false,100));assert(nav_step(&nav,false,130)==R1_NAV_DOWN);
+ assert(!nav_step(&nav,true,200));assert(!nav_step(&nav,true,230));
+ assert(!nav_step(&nav,false,300));assert(nav_step(&nav,false,330)==R1_NAV_DOWN);
+ assert(!nav_step(&nav,true,400));assert(!nav_step(&nav,true,430));
+ assert(!nav_step(&nav,false,700));assert(nav_step(&nav,false,730)==R1_NAV_DOWN);
+ assert(!nav_step(&nav,false,2000));
+ /* Follow-up and down repeat also survive the millisecond counter wrap. */
+ r1_button_init(&nav,false,UINT32_MAX-200);
+ assert(!nav_step(&nav,true,UINT32_MAX-180));assert(!nav_step(&nav,true,UINT32_MAX-150));
+ assert(!nav_step(&nav,false,UINT32_MAX-100));assert(nav_step(&nav,false,UINT32_MAX-70)==R1_NAV_DOWN);
+ assert(!nav_step(&nav,true,20));assert(!nav_step(&nav,true,50));
+ assert(nav_step(&nav,true,250)==R1_NAV_DOWN);assert(nav_step(&nav,true,750)==R1_NAV_DOWN);
+ r1_button_init(&nav,true,751);assert(!nav_step(&nav,true,5000));
+ puts("input tests passed: tap/navigation regressions, up/down follow-up and repeat, release/bounce stop, no catch-up, connection reset, timer wrap");
 }

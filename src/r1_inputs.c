@@ -55,14 +55,54 @@ unsigned r1_button_update(struct r1_button *s,bool down,uint32_t now,
  return events;
 }
 unsigned r1_nav_button_update(struct r1_button *s,bool down,uint32_t now,
-                             uint32_t debounce_ms,uint32_t hold_ms,uint32_t repeat_ms) {
+ uint32_t debounce_ms,uint32_t hold_ms,uint32_t double_ms,
+ uint32_t followup_hold_ms,uint32_t repeat_ms) {
+ bool was_stable=s->stable;
  unsigned events=r1_button_update(s,down,now,debounce_ms,hold_ms,0,hold_ms);
- if(events&R1_INPUT_HOLD) {s->nav_repeat_ms=now;return R1_NAV_UP;}
- if(events&R1_INPUT_CLICK) return R1_NAV_DOWN;
+ if(!was_stable && s->stable) {
+  s->followup=double_ms && s->nav_tap_valid &&
+    (uint32_t)(s->changed_ms-s->nav_tap_ms)<=double_ms;
+  s->active_hold_ms=s->followup?followup_hold_ms:hold_ms;
+  s->nav_tap_valid=false;
+ }
+ if(events&(R1_INPUT_HOLD|R1_INPUT_TAP_HOLD)) {
+  s->nav_direction=(events&R1_INPUT_TAP_HOLD)?R1_NAV_DOWN:R1_NAV_UP;
+  s->nav_repeat_ms=now;return s->nav_direction;
+ }
+ if(events&(R1_INPUT_CLICK|R1_INPUT_DOUBLE)) {
+  s->nav_tap_valid=true;s->nav_tap_ms=now;return R1_NAV_DOWN;
+ }
  if(repeat_ms && s->armed && s->held && s->stable && s->raw &&
     (uint32_t)(now-s->changed_ms)>=debounce_ms &&
     (uint32_t)(now-s->nav_repeat_ms)>=repeat_ms) {
-  s->nav_repeat_ms=now;return R1_NAV_UP;
+  s->nav_repeat_ms=now;return s->nav_direction;
  }
  return R1_NAV_NONE;
+}
+void r1_chord_init(struct r1_chord *s,unsigned raw,uint32_t now) {
+ *s=(struct r1_chord){.raw=raw,.blocked=raw!=0,.changed_ms=now,.first_ms=now};
+}
+unsigned r1_chord_update(struct r1_chord *s,unsigned raw,uint32_t now,
+ uint32_t debounce_ms,uint32_t window_ms,uint32_t hold_ms) {
+ unsigned events=0,previous=s->raw;
+ if(raw!=previous) {s->raw=raw;s->changed_ms=now;}
+ if(!s->blocked) {
+  if(!previous && raw) s->first_ms=now;
+  if(raw==3 && previous!=3 && (uint32_t)(now-s->first_ms)<=window_ms) {
+   s->blocked=true;s->qualified=true;s->toggled=false;s->both_ms=now;
+   events|=R1_CHORD_START;
+  }
+ }
+ if(s->blocked) {
+  events|=R1_CHORD_BLOCK;
+  /* Any raw release cancels the hold, including contact bounce. */
+  if(raw!=3) s->qualified=false;
+  if(s->qualified && !s->toggled && (uint32_t)(now-s->both_ms)>=hold_ms &&
+     (uint32_t)(now-s->changed_ms)>=debounce_ms) {
+   s->toggled=true;events|=R1_CHORD_TOGGLE;
+  }
+  if(!raw && (uint32_t)(now-s->changed_ms)>=debounce_ms)
+   s->blocked=s->qualified=s->toggled=false;
+ }
+ return events;
 }

@@ -4,12 +4,13 @@
 #include "r1_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include <string.h>
 static i2c_master_bus_handle_t bus;
 static SemaphoreHandle_t mutex;
 void r1_i2c_init(void) {
-#if R1_BATTERY_PM1_ENABLED || R1_TOUCH_ENABLED
+#if R1_BATTERY_PM1_ENABLED || R1_TOUCH_ENABLED || R1_HAPTIC_ENABLED
  mutex=xSemaphoreCreateMutex();
  if(!mutex) {ESP_LOGE("R1I2C","MUTEX_FAILED");return;}
  i2c_master_bus_config_t cfg={.i2c_port=I2C_NUM_0,
@@ -43,4 +44,22 @@ esp_err_t r1_i2c_write(i2c_master_dev_handle_t dev,uint8_t reg,const uint8_t *da
  bytes[0]=reg;memcpy(bytes+1,data,n);
  if(!lock()) return ESP_ERR_INVALID_STATE;
  esp_err_t e=i2c_master_transmit(dev,bytes,n+1,20);xSemaphoreGive(mutex);return e;
+}
+esp_err_t r1_i2c_update16(i2c_master_dev_handle_t dev,uint8_t reg,uint16_t set,uint16_t clear) {
+ if(!lock()) return ESP_ERR_INVALID_STATE;
+ uint8_t b[3]={reg};
+ esp_err_t e=i2c_master_transmit_receive(dev,&reg,1,b+1,2,20);
+ uint16_t value=0;
+ if(e==ESP_OK) {
+  value=(((uint16_t)b[1]|((uint16_t)b[2]<<8))|set)&~clear;
+  b[1]=(uint8_t)value;b[2]=(uint8_t)(value>>8);
+  e=i2c_master_transmit(dev,b,3,20);
+ }
+ if(e==ESP_OK) {
+  vTaskDelay(pdMS_TO_TICKS(1));
+  e=i2c_master_transmit_receive(dev,&reg,1,b+1,2,20);
+  uint16_t actual=(uint16_t)b[1]|((uint16_t)b[2]<<8);
+  if(e==ESP_OK && (actual&(set|clear))!=(value&(set|clear))) e=ESP_FAIL;
+ }
+ xSemaphoreGive(mutex);return e;
 }
